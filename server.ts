@@ -27,52 +27,68 @@ if (geminiApiKey) {
   });
 }
 
-// 1. Gemini Vision Cover Analysis
+// 1. Gemini Vision Cover Analysis (Single or Multi-cover Lot Recognition)
 app.post('/api/gemini/analyze-cover', async (req, res) => {
   try {
-    const { imageBase64, mimeType = 'image/jpeg', existingFranchises = [] } = req.body;
+    const {
+      imageBase64,
+      imagesBase64 = [],
+      mimeType = 'image/jpeg',
+      existingFranchises = [],
+    } = req.body;
 
-    if (!imageBase64) {
-      return res.status(400).json({ error: 'Nenhuma imagem enviada para análise.' });
+    const allImages: string[] = [];
+    if (Array.isArray(imagesBase64) && imagesBase64.length > 0) {
+      allImages.push(...imagesBase64);
+    } else if (imageBase64) {
+      allImages.push(imageBase64);
     }
 
-    // Clean base64 string if it contains data prefix
-    const cleanBase64 = imageBase64.replace(/^data:image\/\w+;base64,/, '');
+    if (allImages.length === 0) {
+      return res.status(400).json({ error: 'Nenhuma foto enviada para análise.' });
+    }
+
+    const customApiKey = req.headers['x-gemini-api-key'] as string;
+    let localAiClient = aiClient;
+    if (customApiKey && (!localAiClient || customApiKey !== process.env.GEMINI_API_KEY)) {
+      localAiClient = new GoogleGenAI({
+        apiKey: customApiKey,
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build',
+          },
+        },
+      });
+    }
 
     const franchisesPrompt = existingFranchises.length > 0
-      ? `Categorias/Franquias atualmente existentes no acervo: [${existingFranchises.join(', ')}]. Se o personagem pertencer a uma dessas, use EXATAMENTE o mesmo nome para agrupar. Caso seja um personagem inédito (ex: Justiceiro, Demolidor, Spawn), crie uma nova categoria concisa.`
-      : 'Crie uma categoria concisa e padronizada para a franquia/personagem principal (ex: "Homem-Aranha", "Batman", "Superman", "Justiceiro", "X-Men").';
+      ? `Categorias existentes no acervo: [${existingFranchises.join(', ')}]. Se o gibi pertencer a uma dessas, use exatamente o mesmo nome. Caso seja inédito (ex: Justiceiro, Demolidor, Spawn, Batman), crie uma nova categoria concisa.`
+      : 'Crie uma categoria concisa para o personagem ou franquia principal (ex: "Homem-Aranha", "Batman", "Superman", "Justiceiro", "X-Men").';
 
-    const systemInstruction = `Você é o principal avaliador e historiador de revistas em quadrinhos (HQs, gibis e formatinhos) no Brasil (Editora Abril, Panini, EBAL, Bloch, Mythos, etc.).
-Analise a capa da HQ enviada e retorne estritamente um JSON estruturado.
-Identifique com precisão:
-- Título do anúncio atraente para venda
-- Editora (escolha entre: "Marvel", "DC Comics", "Panini", "Editora Abril", "Image Comics", "Dark Horse", "Outra")
-- Nome da série
-- Franquia / Categoria de agrupamento: ${franchisesPrompt}
-- Número da edição
-- Ano estimado de publicação
-- Preço de mercado sugerido em BRL (valor justo para colecionadores)
-- Breve descrição de 2 a 3 frases instigantes sobre a edição
-- Sugestão inicial de estado de conservação baseada na foto (otimo, bom, ruim, leitura)
-- Personagens chave visíveis`;
+    const systemInstruction = `Você é um avaliador e historiador de revistas em quadrinhos no Brasil (Editora Abril, Panini, EBAL, Mythos, etc.).
+Analise a capa ou conjunto de capas enviadas (${allImages.length} imagem/imagens) e retorne estritamente um JSON estruturado.
+Regras de Precificação e Lotes:
+1. Se houver mais de uma capa ou se a capa mostrar um lote/coleção, identifique se faz sentido vender como Lote Completo (coleção/saga sequencial).
+2. Forneça o preço da UNIDADE individual e o PREÇO DO LOTE COMPLETO com desconto justo de colecionador (aproximadamente 15% a 25% de desconto no lote).
+3. Se for uma edição avulsa única, o preço unitário e o preço total serão o mesmo.
+4. Gere uma sinopse direta, profissional e atraente (2 a 3 frases no máximo), focada no arco e personagens, sem frases clichês ou menções repetitivas de limpeza.`;
 
-    if (aiClient) {
+    if (localAiClient) {
       try {
-        const imagePart = {
+        const imageParts = allImages.slice(0, 5).map((b64) => ({
           inlineData: {
             mimeType,
-            data: cleanBase64,
+            data: b64.replace(/^data:image\/\w+;base64,/, ''),
           },
-        };
+        }));
 
-        const response = await aiClient.models.generateContent({
+        const response = await localAiClient.models.generateContent({
           model: 'gemini-3.8-flash',
           contents: {
             parts: [
-              imagePart,
+              ...imageParts,
               {
-                text: 'Analise detalhadamente esta capa de história em quadrinhos para catalogação e precificação no marketplace.',
+                text: `Analise estas ${allImages.length} foto(s) de gibi(s) para catalogação na loja HQ Master. Identifique franquia, série, número, ano, estado de conservação, preço unitário e preço de lote com desconto se for coleção.`,
               },
             ],
           },
@@ -82,35 +98,21 @@ Identifique com precisão:
             responseSchema: {
               type: Type.OBJECT,
               properties: {
-                title: { type: Type.STRING, description: 'Título comercial para o anúncio' },
-                publisher: {
-                  type: Type.STRING,
-                  description: 'Editora responsável',
-                },
+                title: { type: Type.STRING, description: 'Título comercial do anúncio' },
+                publisher: { type: Type.STRING, description: 'Editora responsável' },
                 series: { type: Type.STRING, description: 'Série da revista' },
-                franchiseCategory: {
-                  type: Type.STRING,
-                  description: 'Franquia ou personagem para agrupamento de coleção',
-                },
-                issueNumber: { type: Type.STRING, description: 'Número da edição' },
+                franchiseCategory: { type: Type.STRING, description: 'Franquia ou personagem' },
+                issueNumber: { type: Type.STRING, description: 'Número da edição ou intervalo de edições' },
                 yearEstimate: { type: Type.INTEGER, description: 'Ano aproximado de lançamento' },
-                suggestedPrice: {
-                  type: Type.NUMBER,
-                  description: 'Preço de mercado sugerido em Reais (BRL)',
-                },
-                description: {
-                  type: Type.STRING,
-                  description: 'Descrição editorial atrativa do gibi',
-                },
-                conditionGradeSuggestion: {
-                  type: Type.STRING,
-                  description: 'Grau sugerido: otimo, bom, ruim ou leitura',
-                },
-                keyCharacters: {
-                  type: Type.ARRAY,
-                  items: { type: Type.STRING },
-                  description: 'Personagens na capa',
-                },
+                suggestedPrice: { type: Type.NUMBER, description: 'Preço total do anúncio em BRL' },
+                unitPrice: { type: Type.NUMBER, description: 'Preço por exemplar avulso em BRL' },
+                bundlePrice: { type: Type.NUMBER, description: 'Preço promocional do lote completo em BRL' },
+                isCollection: { type: Type.BOOLEAN, description: 'Se é um lote ou coleção com múltiplas edições' },
+                collectionCount: { type: Type.INTEGER, description: 'Quantidade de edições na coleção' },
+                allowsUnitPurchase: { type: Type.BOOLEAN, description: 'Se permite comprar avulso além do lote' },
+                description: { type: Type.STRING, description: 'Descrição direta e concisa da história' },
+                conditionGradeSuggestion: { type: Type.STRING, description: 'Grau sugerido: otimo, bom, ruim ou leitura' },
+                keyCharacters: { type: Type.ARRAY, items: { type: Type.STRING }, description: 'Personagens' },
               },
               required: [
                 'title',
@@ -134,38 +136,58 @@ Identifique com precisão:
             (f: string) => f.toLowerCase() === (parsed.franchiseCategory || '').toLowerCase()
           );
 
+          const isCol = parsed.isCollection ?? (allImages.length > 1);
+          const count = parsed.collectionCount || (allImages.length > 1 ? allImages.length : 1);
+          const unit = parsed.unitPrice || parsed.suggestedPrice;
+          const bundle = parsed.bundlePrice || (isCol ? Math.round(unit * count * 0.82) : unit);
+
           return res.json({
             success: true,
             source: 'gemini-3.8-flash',
             data: {
               ...parsed,
+              isCollection: isCol,
+              collectionCount: count,
+              unitPrice: unit,
+              bundlePrice: bundle,
+              allowsUnitPurchase: parsed.allowsUnitPurchase ?? isCol,
               isNewCollectionCategory: isNewCollection,
             },
           });
         }
       } catch (geminiErr: any) {
-        console.warn('Gemini vision API error, applying intelligent fallback:', geminiErr?.message);
+        console.warn('Gemini vision API error in server.ts:', geminiErr?.message);
       }
     }
 
-    // Smart fallback if API key is not present or rate limited
-    // Deterministic heuristic response so the flow remains 100% interactive
     const fallbackFranchise = existingFranchises.length > 0 ? existingFranchises[0] : 'Homem-Aranha';
+    const isMulti = allImages.length > 1;
+    const unitFallback = 25.0;
+    const countFallback = isMulti ? allImages.length : 1;
+    const bundleFallback = isMulti ? Math.round(unitFallback * countFallback * 0.8) : unitFallback;
+
     return res.json({
       success: true,
       source: 'heuristic-analyzer',
       data: {
-        title: 'Revista em Quadrinhos Clássica - Edição Especial de Colecionador',
+        title: isMulti
+          ? `Lote Coleção: ${fallbackFranchise} (${countFallback} Edições Completas)`
+          : `Revista Clássica: ${fallbackFranchise} - Edição Especial`,
         publisher: 'Editora Abril',
-        series: 'Grandes Clássicos dos Quadrinhos',
+        series: `${fallbackFranchise} Clássico`,
         franchiseCategory: fallbackFranchise,
-        issueNumber: '#01',
+        issueNumber: isMulti ? `Lote #01 ao #${countFallback}` : '#01',
         yearEstimate: 1992,
-        suggestedPrice: 35.0,
-        description: 'Exemplar clássico formatinho de época. Miolo completo, higienizado com pano seco e sem produtos químicos.',
+        suggestedPrice: bundleFallback,
+        unitPrice: unitFallback,
+        bundlePrice: bundleFallback,
+        isCollection: isMulti,
+        collectionCount: countFallback,
+        allowsUnitPurchase: isMulti,
+        description: 'Exemplar histórico preservado com miolo original 100% completo e cores autênticas.',
         conditionGradeSuggestion: 'bom',
         isNewCollectionCategory: false,
-        keyCharacters: ['Herói Principal', 'Vilão'],
+        keyCharacters: [fallbackFranchise],
       },
     });
   } catch (error: any) {

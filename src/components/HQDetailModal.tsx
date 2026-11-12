@@ -145,15 +145,37 @@ export const HQDetailModal: React.FC<HQDetailModalProps> = ({
                   <span className="font-medium text-white">{hq.year}</span>
                 </div>
                 <div>
-                  <span className="text-zinc-500 block text-[10px] uppercase font-semibold">Higienização</span>
-                  <span className="font-medium text-emerald-400">Pano seco e limpo</span>
+                  <span className="text-zinc-500 block text-[10px] uppercase font-semibold">Integridade</span>
+                  <span className="font-medium text-emerald-400">100% Páginas Completas</span>
                 </div>
               </div>
+
+              {/* Unit vs Collection Option Selector */}
+              {hq.isCollection && (
+                <div className="p-3 bg-amber-500/10 rounded-2xl border border-amber-500/30 text-xs space-y-2 mb-3">
+                  <span className="font-bold text-amber-300 block">Opções de Compra Disponíveis:</span>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <div className="p-2.5 rounded-xl bg-zinc-950/80 border border-amber-500/40">
+                      <span className="text-[10px] uppercase font-black text-amber-400 block">Lote Completo c/ Desconto</span>
+                      <strong className="text-white text-sm">{formatBRL(hq.bundlePrice || hq.price)}</strong>
+                      <span className="text-[10px] text-zinc-400 block mt-0.5">Leve a coleção inteira ({hq.collectionCount} revistas)</span>
+                    </div>
+
+                    {hq.allowsUnitPurchase && hq.unitPrice && (
+                      <div className="p-2.5 rounded-xl bg-zinc-950/60 border border-zinc-800">
+                        <span className="text-[10px] uppercase font-bold text-zinc-400 block">Exemplar Avulso</span>
+                        <strong className="text-white text-sm">{formatBRL(hq.unitPrice)}</strong>
+                        <span className="text-[10px] text-zinc-400 block mt-0.5">Valor por unidade avulsa</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
 
               {/* Description */}
               <div className="space-y-1.5 mb-4">
                 <h4 className="text-xs font-bold text-zinc-400 uppercase tracking-wide">
-                  Descrição & Sinopse
+                  Descrição
                 </h4>
                 <p className="text-sm text-zinc-200 leading-relaxed bg-zinc-950/40 p-3 rounded-xl border border-zinc-850">
                   {hq.description}
@@ -164,7 +186,7 @@ export const HQDetailModal: React.FC<HQDetailModalProps> = ({
               <div className="space-y-1.5 mb-4">
                 <div className="flex items-center justify-between">
                   <h4 className="text-xs font-bold text-zinc-400 uppercase tracking-wide">
-                    Estado de Conservação Declarado
+                    Estado de Conservação
                   </h4>
                   <span className={`text-xs font-bold px-2 py-0.5 rounded border ${conditionMeta.badgeClass}`}>
                     {conditionMeta.label}
@@ -175,7 +197,7 @@ export const HQDetailModal: React.FC<HQDetailModalProps> = ({
                   <p>{conditionMeta.fullDesc}</p>
                   {hq.conditionDetails && (
                     <div className="text-[11px] text-amber-200/90 pt-1 border-t border-zinc-800/80 font-medium">
-                      <strong>Observações do exemplar:</strong> {hq.conditionDetails}
+                      <strong>Observações:</strong> {hq.conditionDetails}
                     </div>
                   )}
                 </div>
@@ -186,7 +208,7 @@ export const HQDetailModal: React.FC<HQDetailModalProps> = ({
                 <div className="flex items-center gap-2">
                   <Store className="w-4 h-4 text-amber-400" />
                   <div>
-                    <span className="text-[10px] text-zinc-500 block uppercase">Anunciado e Vendido por</span>
+                    <span className="text-[10px] text-zinc-500 block uppercase">Vendido por</span>
                     <strong className="text-zinc-100">{hq.sellerName}</strong>
                   </div>
                 </div>
@@ -203,7 +225,9 @@ export const HQDetailModal: React.FC<HQDetailModalProps> = ({
             {/* Bottom Checkout Action */}
             <div className="pt-4 border-t border-zinc-800 flex items-center justify-between gap-4">
               <div>
-                <span className="text-xs text-zinc-400 block font-medium">Valor do Exemplar</span>
+                <span className="text-xs text-zinc-400 block font-medium">
+                  {hq.isCollection ? 'Preço do Lote Promocional' : 'Preço'}
+                </span>
                 <span className="text-2xl font-black text-amber-400 font-['Space_Grotesk']">
                   {formatBRL(hq.price)}
                 </span>

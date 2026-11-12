@@ -233,3 +233,81 @@ export function evaluateProposalStatus(
   if (statuses.every((s) => s === 'accepted')) return 'approved';
   return 'pending';
 }
+
+export function calculateAccurateFreight(buyerCep: string, sellerCep: string = '01310-100', itemCount: number = 1) {
+  const cleanBuyer = buyerCep.replace(/\D/g, '');
+  const cleanSeller = sellerCep.replace(/\D/g, '');
+
+  if (cleanBuyer.length < 8) {
+    return null;
+  }
+
+  const buyerPrefix = parseInt(cleanBuyer.substring(0, 2), 10);
+  const sellerPrefix = parseInt(cleanSeller.substring(0, 2), 10);
+
+  const isSameMetro = Math.floor(buyerPrefix / 10) === Math.floor(sellerPrefix / 10) && Math.abs(buyerPrefix - sellerPrefix) <= 4;
+  const isSameState = (buyerPrefix <= 19 && sellerPrefix <= 19) || (buyerPrefix >= 20 && buyerPrefix <= 28 && sellerPrefix >= 20 && sellerPrefix <= 28);
+
+  let basePac = 26.50;
+  let baseSedex = 42.00;
+  let pacDays = '6 a 9 dias úteis';
+  let sedexDays = '2 a 4 dias úteis';
+
+  if (isSameMetro) {
+    basePac = 14.90;
+    baseSedex = 19.90;
+    pacDays = '2 a 4 dias úteis';
+    sedexDays = '1 a 2 dias úteis';
+  } else if (isSameState) {
+    basePac = 19.80;
+    baseSedex = 28.50;
+    pacDays = '4 a 6 dias úteis';
+    sedexDays = '2 a 3 dias úteis';
+  } else if (buyerPrefix <= 39 && sellerPrefix <= 39) {
+    basePac = 24.90;
+    baseSedex = 38.00;
+    pacDays = '5 a 8 dias úteis';
+    sedexDays = '2 a 4 dias úteis';
+  } else if (buyerPrefix >= 80 && buyerPrefix <= 99) {
+    basePac = 28.90;
+    baseSedex = 46.00;
+    pacDays = '6 a 9 dias úteis';
+    sedexDays = '3 a 5 dias úteis';
+  } else if (buyerPrefix >= 40 && buyerPrefix <= 65) {
+    basePac = 32.50;
+    baseSedex = 54.00;
+    pacDays = '8 a 12 dias úteis';
+    sedexDays = '3 a 6 dias úteis';
+  } else {
+    basePac = 38.00;
+    baseSedex = 68.00;
+    pacDays = '10 a 16 dias úteis';
+    sedexDays = '4 a 7 dias úteis';
+  }
+
+  const additionalWeightFactor = Math.max(0, (itemCount - 1) * 1.5);
+
+  return [
+    {
+      code: 'PAC',
+      name: 'Correios PAC (Econômico)',
+      price: Number((basePac + additionalWeightFactor).toFixed(2)),
+      days: pacDays,
+      insuranceIncluded: true,
+    },
+    {
+      code: 'SEDEX',
+      name: 'Correios SEDEX (Expresso)',
+      price: Number((baseSedex + additionalWeightFactor).toFixed(2)),
+      days: sedexDays,
+      insuranceIncluded: true,
+    },
+    {
+      code: 'RETIRADA',
+      name: 'Retirada com o Vendedor (Sem custo)',
+      price: 0.0,
+      days: 'A combinar após confirmação',
+      insuranceIncluded: false,
+    },
+  ];
+}

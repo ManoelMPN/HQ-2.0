@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { X, Trash2, ShoppingBag, Truck, ShieldCheck, ArrowRight, MessageSquareQuote, CheckCircle2, QrCode, ExternalLink, AlertTriangle } from 'lucide-react';
 import { CartItem, HQItem, Order } from '../types.ts';
-import { calculateCartTotals, formatBRL, MIN_ORDER_VALUE } from '../utils/comicLogic.ts';
+import { calculateCartTotals, formatBRL, MIN_ORDER_VALUE, calculateAccurateFreight } from '../utils/comicLogic.ts';
 
 interface CartDrawerProps {
   isOpen: boolean;
@@ -45,55 +45,40 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
     distinctSellersCount,
   } = calculateCartTotals(cart, 0, shippingCost);
 
-  // Calculate freight via backend API
+  // Calculate accurate freight via Brazilian postal zones & weight
   const handleCalculateFreight = async () => {
     const cleanCep = buyerCep.replace(/\D/g, '');
     if (cleanCep.length < 8) return;
 
     setLoadingFreight(true);
     try {
+      // First try backend API
       const res = await fetch('/api/frete/calcular', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           buyerCep: cleanCep,
-          sellerCep: '01310-100', // Origin
+          sellerCep: '01310-100',
           itemCount: totalItemsCount,
         }),
       });
-      const data = await res.json();
-      if (data.success && data.options) {
-        setShippingOptions(data.options);
-        setSelectedShipping(data.options[0]); // default to PAC
+
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && data.options) {
+          setShippingOptions(data.options);
+          setSelectedShipping(data.options[0]);
+          return;
+        }
       }
-    } catch (e) {
-      console.warn('Freight API offline, applying local Correios calculator:', e);
-      const isSP = cleanCep.startsWith('0');
-      const fallbackOptions = [
-        {
-          code: 'PAC',
-          name: 'Correios PAC (Econômico)',
-          price: isSP ? 14.9 : 24.5,
-          days: isSP ? '3 a 5 dias úteis' : '6 a 10 dias úteis',
-          insuranceIncluded: true,
-        },
-        {
-          code: 'SEDEX',
-          name: 'Correios SEDEX (Expresso)',
-          price: isSP ? 22.9 : 39.8,
-          days: isSP ? '1 a 2 dias úteis' : '2 a 4 dias úteis',
-          insuranceIncluded: true,
-        },
-        {
-          code: 'RETIRADA',
-          name: 'Retirar com o Vendedor (Sem custo)',
-          price: 0.0,
-          days: 'A combinar após confirmação',
-          insuranceIncluded: false,
-        },
-      ];
-      setShippingOptions(fallbackOptions);
-      setSelectedShipping(fallbackOptions[0]);
+      throw new Error('Fallback needed');
+    } catch {
+      // High-precision local postal engine fallback
+      const accurate = calculateAccurateFreight(cleanCep, '01310-100', totalItemsCount);
+      if (accurate) {
+        setShippingOptions(accurate);
+        setSelectedShipping(accurate[0]);
+      }
     } finally {
       setLoadingFreight(false);
     }

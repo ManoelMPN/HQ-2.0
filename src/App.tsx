@@ -12,7 +12,6 @@ import { HQItem, Seller, CartItem, FilterState, DiscountProposal, Order } from '
 import { INITIAL_HQS, INITIAL_SELLERS } from './data/initialComics.ts';
 import { filterHQs, formatBRL } from './utils/comicLogic.ts';
 import { Header } from './components/Header.tsx';
-import { HonestCollectorCard } from './components/HonestCollectorCard.tsx';
 import { ShowcaseCarousel } from './components/ShowcaseCarousel.tsx';
 import { ComicFilters } from './components/ComicFilters.tsx';
 import { HQCard } from './components/HQCard.tsx';
@@ -21,6 +20,7 @@ import { CartDrawer } from './components/CartDrawer.tsx';
 import { DiscountNegotiationModal } from './components/DiscountNegotiationModal.tsx';
 import { PartnerOnboardingModal } from './components/PartnerOnboardingModal.tsx';
 import { AdminPage } from './components/AdminPage.tsx';
+import { HQMasterLogo } from './components/HQMasterLogo.tsx';
 
 const STORAGE_HQS = 'bancahq_items_v2';
 const STORAGE_SELLERS = 'bancahq_sellers_v2';
@@ -223,32 +223,41 @@ export default function App() {
     setSellers((prev) => [...prev, newSeller]);
   };
 
+  const handleDeleteSeller = (id: string) => {
+    setSellers((prev) => prev.filter((s) => s.id !== id || s.role === 'master'));
+  };
+
+  const handleUpdateSellerPassword = (sellerId: string, newPass: string) => {
+    setSellers((prev) =>
+      prev.map((s) => (s.id === sellerId ? { ...s, password: newPass } : s))
+    );
+    if (currentSeller && currentSeller.id === sellerId) {
+      setCurrentSeller((prev) => (prev ? { ...prev, password: newPass } : null));
+    }
+  };
+
   const handleLoginSeller = (email: string, pass: string): boolean => {
     const trimmedEmail = email.trim().toLowerCase();
-    // Master admin credentials check (supports neto.mmp@gmail.com, admin, admin@bancahq.com)
-    const isMasterEmail =
+    const master = sellers.find((s) => s.role === 'master') || sellers[0];
+    const masterEmail = (master?.email || 'neto.mmp@gmail.com').toLowerCase();
+
+    // Master login
+    if (
+      trimmedEmail === masterEmail ||
       trimmedEmail === 'neto.mmp@gmail.com' ||
-      trimmedEmail === 'admin' ||
-      trimmedEmail === 'admin@bancahq.com' ||
-      trimmedEmail === 'neto';
-
-    const isMasterPass =
-      pass === 'admin' ||
-      pass === '123456' ||
-      pass === '123' ||
-      pass === 'hqmaster2026' ||
-      pass === '';
-
-    if (isMasterEmail && (isMasterPass || pass.length >= 3)) {
-      const master = sellers.find((s) => s.role === 'master') || sellers[0];
-      setCurrentSeller(master);
-      return true;
+      trimmedEmail === 'admin'
+    ) {
+      const validPass = master?.password || 'admin';
+      if (pass === validPass || pass === 'admin' || pass === 'hqmaster2026') {
+        setCurrentSeller(master);
+        return true;
+      }
+      return false;
     }
 
+    // Collaborator partner login
     const matched = sellers.find(
-      (s) =>
-        s.email.toLowerCase() === trimmedEmail &&
-        (s.password === pass || pass === '123' || pass === 'admin' || pass === '123456')
+      (s) => s.email.toLowerCase() === trimmedEmail && s.password === pass
     );
     if (matched) {
       setCurrentSeller(matched);
@@ -330,6 +339,8 @@ export default function App() {
         onClearDemoHQs={handleClearDemoHQs}
         sellers={sellers}
         onAddSeller={handleAddSeller}
+        onDeleteSeller={handleDeleteSeller}
+        onUpdateSellerPassword={handleUpdateSellerPassword}
         currentSeller={currentSeller}
         onLoginSeller={handleLoginSeller}
         onLogoutSeller={handleLogoutSeller}
@@ -405,9 +416,6 @@ export default function App() {
             </div>
           </div>
         </section>
-
-        {/* Honest Collector Guarantee Banner */}
-        <HonestCollectorCard />
 
         {/* Showcase of Top Covers */}
         <ShowcaseCarousel
@@ -545,21 +553,16 @@ export default function App() {
       </main>
 
       {/* Footer */}
-      <footer className="mt-16 bg-[#0a0c11] border-t border-zinc-800/80 py-10 px-4 sm:px-6 text-xs text-zinc-500">
+      <footer className="mt-16 bg-[#090b10] border-t border-zinc-800/80 py-10 px-4 sm:px-6 text-xs text-zinc-500">
         <div className="max-w-7xl mx-auto grid grid-cols-1 md:grid-cols-4 gap-8">
-          <div className="space-y-2 md:col-span-2">
-            <div className="flex items-center gap-2">
-              <BookOpen className="w-5 h-5 text-amber-400" />
-              <span className="font-extrabold text-lg text-white font-['Space_Grotesk']">
-                BANCA<span className="text-amber-400">HQ</span>
-              </span>
-            </div>
+          <div className="space-y-3 md:col-span-2">
+            <HQMasterLogo size="md" />
             <p className="text-zinc-400 leading-relaxed text-xs max-w-md">
-              Loja e marketplace especializado em revistas em quadrinhos históricas, edições raras e formatinhos clássicos.
-              Catalogação com avaliação visual e checkout integrado Mercado Livre / Mercado Pago.
+              Loja e acervo especializado em revistas em quadrinhos, formatinhos clássicos e coleções completas.
+              Catalogação inteligente e pagamento com checkout seguro.
             </p>
             <p className="text-[11px] text-zinc-500 pt-1">
-              Higienização exclusivamente a seco com pano limpo. 100% das páginas garantidas em todas as edições.
+              Garantia de 100% das páginas preservadas para leitura integral em todas as edições.
             </p>
           </div>
 
@@ -584,14 +587,14 @@ export default function App() {
             <p className="text-xs text-zinc-400 leading-relaxed">
               Pagamentos seguros via Mercado Pago (Pix e Cartão). Envios rastreados via Correios (PAC e SEDEX) para todo o Brasil.
             </p>
-            <div className="text-[11px] text-amber-400/90 font-semibold pt-1">
+            <div className="text-[11px] text-amber-400 font-semibold pt-1">
               Pedido mínimo da loja: {formatBRL(30.0)}
             </div>
           </div>
         </div>
 
         <div className="max-w-7xl mx-auto pt-8 mt-8 border-t border-zinc-900 text-center text-[11px] text-zinc-600">
-          © {new Date().getFullYear()} BancaHQ. Marvel, DC Comics e Editora Abril são marcas registradas de seus respectivos proprietários.
+          © {new Date().getFullYear()} HQ Master. Todos os direitos reservados.
         </div>
       </footer>
 

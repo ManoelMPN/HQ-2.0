@@ -8,6 +8,7 @@ import {
   filterHQs,
   calculateCartTotals,
   evaluateProposalStatus,
+  calculateAccurateFreight,
   MIN_ORDER_VALUE,
 } from './comicLogic.ts';
 import { HQItem, CartItem, FilterState } from '../types.ts';
@@ -194,3 +195,15 @@ test('evaluateProposalStatus requires all sellers to accept', () => {
     'rejected'
   );
 });
+
+test('calculateAccurateFreight calculates postal costs based on Brazilian CEP zones', () => {
+  const spLocal = calculateAccurateFreight('01310-100', '01310-100', 1);
+  assert.ok(spLocal);
+  assert.equal(spLocal[0].code, 'PAC');
+  assert.equal(spLocal[0].price, 14.90);
+
+  const nordeste = calculateAccurateFreight('40000-000', '01310-100', 2);
+  assert.ok(nordeste);
+  assert.ok(nordeste[0].price > 30);
+});
+

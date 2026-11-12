@@ -14,6 +14,9 @@ export interface HQItem {
   hasAllPages: boolean; // Always true as requested
   cleaningNote: string; // "Limpa exclusivamente com pano seco e macio"
   price: number;
+  unitPrice?: number;
+  bundlePrice?: number;
+  allowsUnitPurchase?: boolean;
   isRareSpecial1Real?: boolean;
   isCollection: boolean; // Single issue or entire collection/lot
   collectionCount?: number;
