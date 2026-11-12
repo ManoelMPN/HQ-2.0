@@ -1,0 +1,6 @@
+{
+  "name": "BancaHQ - Loja de Quadrinhos & Gibis Raros",
+  "description": "Plataforma especializada em compra, venda e catalogação de HQs e gibis com IA de reconhecimento visual de capas, gestão de coleções, múltiplos vendedores e checkout Mercado Livre / Mercado Pago.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
