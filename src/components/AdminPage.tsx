@@ -33,7 +33,13 @@ import {
 } from 'lucide-react';
 import { HQItem, Seller, ConditionGrade, DiscountProposal, Order } from '../types.ts';
 import { formatBRL, getConditionInfo, normalizeFranchiseName } from '../utils/comicLogic.ts';
-import { SUPABASE_SQL_SCHEMA, getSupabaseCredentials, saveSupabaseCredentials } from '../utils/supabaseClient.ts';
+import {
+  SUPABASE_SQL_SCHEMA,
+  getSupabaseCredentials,
+  saveSupabaseCredentials,
+  normalizeSupabaseUrl,
+  isSecretSupabaseKey,
+} from '../utils/supabaseClient.ts';
 import { compressFileToBase64, compressImageBase64 } from '../utils/imageCompressor.ts';
 import { HQMasterLogo } from './HQMasterLogo.tsx';
 
@@ -456,7 +462,11 @@ export const AdminPage: React.FC<AdminPageProps> = ({
   // Save & Immediately Sync Supabase Config
   const handleSaveSupabaseConfig = async (e: React.FormEvent) => {
     e.preventDefault();
-    saveSupabaseCredentials(sbUrl, sbKey);
+    const cleanUrl = normalizeSupabaseUrl(sbUrl);
+    const cleanKey = sbKey.trim();
+    setSbUrl(cleanUrl);
+    setSbKey(cleanKey);
+    saveSupabaseCredentials(cleanUrl, cleanKey);
     setSbSavedMsg(true);
     setTimeout(() => setSbSavedMsg(false), 3000);
 
@@ -472,7 +482,11 @@ export const AdminPage: React.FC<AdminPageProps> = ({
   };
 
   const handleTestAndSyncSupabase = async () => {
-    saveSupabaseCredentials(sbUrl, sbKey);
+    const cleanUrl = normalizeSupabaseUrl(sbUrl);
+    const cleanKey = sbKey.trim();
+    setSbUrl(cleanUrl);
+    setSbKey(cleanKey);
+    saveSupabaseCredentials(cleanUrl, cleanKey);
     if (!onSyncSupabase) return;
     setTestingSupabase(true);
     try {
@@ -1943,25 +1957,41 @@ export const AdminPage: React.FC<AdminPageProps> = ({
 
                 <form onSubmit={handleSaveSupabaseConfig} className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
                   <div>
-                    <label className="block text-xs font-semibold text-zinc-300 mb-1">Project URL do Supabase</label>
+                    <label className="block text-xs font-semibold text-zinc-300 mb-1">
+                      Project URL do Supabase (sem /rest/v1/)
+                    </label>
                     <input
                       type="text"
                       value={sbUrl}
                       onChange={(e) => setSbUrl(e.target.value)}
+                      onBlur={() => setSbUrl(normalizeSupabaseUrl(sbUrl))}
                       placeholder="https://xyz.supabase.co"
-                      className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2 text-xs text-white"
+                      className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2 text-xs text-white font-mono"
                     />
                   </div>
 
                   <div>
-                    <label className="block text-xs font-semibold text-zinc-300 mb-1">Anon Public Key</label>
+                    <label className="block text-xs font-semibold text-zinc-300 mb-1">
+                      Publishable / Anon Public Key (NÃO use Secret Key)
+                    </label>
                     <input
                       type="password"
                       value={sbKey}
-                      onChange={(e) => setSbKey(e.target.value)}
-                      placeholder="eyJhbGci..."
-                      className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2 text-xs text-white"
+                      onChange={(e) => {
+                        setSbKey(e.target.value);
+                        setSbTestResult(null);
+                      }}
+                      placeholder="sb_publishable_... ou eyJhbGci..."
+                      className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2 text-xs text-white font-mono"
                     />
+                    {isSecretSupabaseKey(sbKey) && (
+                      <p className="text-[11px] text-rose-400 font-semibold mt-1 flex items-start gap-1">
+                        <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                        <span>
+                          Você colou a <strong>Secret Key</strong> (sb_secret_... ou service_role), que o Supabase bloqueia no navegador! Copie a <strong>Publishable key (sb_publishable_...)</strong> ou <strong>anon public (eyJ...)</strong>.
+                        </span>
+                      </p>
+                    )}
                   </div>
 
                   <div className="sm:col-span-2 pt-1 flex flex-wrap items-center gap-2.5">
@@ -2008,8 +2038,8 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                 <div className="bg-zinc-950/80 border border-zinc-800 rounded-xl p-3 text-[11px] text-zinc-400 space-y-1">
                   <strong className="text-zinc-200 block">Passo importante para salvar tudo na nuvem (inclusive na Vercel):</strong>
                   <p>1. No painel do seu projeto Supabase, abra <strong>SQL Editor → New Query</strong>, cole o SQL abaixo e clique em <strong>RUN</strong>.</p>
-                  <p>2. Cole aqui a <strong>Project URL</strong> e a <strong>Anon Public Key</strong> (Settings → API no Supabase) e clique em <strong>Salvar e Sincronizar com Supabase</strong>.</p>
-                  <p>3. Para funcionar automaticamente para todos os seus clientes na Vercel, cadastre também <code className="text-amber-300">VITE_SUPABASE_URL</code>, <code className="text-amber-300">VITE_SUPABASE_ANON_KEY</code>, <code className="text-amber-300">GEMINI_API_KEY</code> e <code className="text-amber-300">MERCADO_PAGO_ACCESS_TOKEN</code> nas <strong>Environment Variables</strong> da Vercel.</p>
+                  <p>2. Em <strong>Project Settings → API Keys</strong> (ou Data API), copie a <strong>Project URL</strong> base (ex: <code className="text-zinc-200">https://xxx.supabase.co</code>, sem <code className="text-zinc-200">/rest/v1/</code>) e a chave pública <strong>Publishable key</strong> (<code className="text-emerald-300">sb_publishable_...</code>) ou legado <strong>anon public</strong> (<code className="text-emerald-300">eyJ...</code>). <strong>Nunca use a Secret key (sb_secret_...)</strong> no navegador.</p>
+                  <p>3. Para funcionar automaticamente para todos os seus clientes na Vercel, cadastre também <code className="text-amber-300">VITE_SUPABASE_URL</code>, <code className="text-amber-300">VITE_SUPABASE_ANON_KEY</code> (usando a chave pública), <code className="text-amber-300">GEMINI_API_KEY</code> e <code className="text-amber-300">MERCADO_PAGO_ACCESS_TOKEN</code> nas <strong>Environment Variables</strong> da Vercel.</p>
                 </div>
 
                 <pre className="bg-zinc-950 p-3 rounded-xl text-[11px] text-zinc-400 font-mono overflow-x-auto max-h-40 border border-zinc-800">

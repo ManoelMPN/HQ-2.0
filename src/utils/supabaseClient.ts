@@ -5,6 +5,33 @@ import { HQItem, Seller, Order, DiscountProposal } from '../types.ts';
 const STORAGE_KEY_URL = 'bancahq_supabase_url';
 const STORAGE_KEY_KEY = 'bancahq_supabase_anon_key';
 
+export function normalizeSupabaseUrl(rawUrl: string): string {
+  const trimmed = (rawUrl || '').trim();
+  if (!trimmed) return '';
+  try {
+    const withProto = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+    const parsed = new URL(withProto);
+    return parsed.origin;
+  } catch {
+    return trimmed.replace(/\/rest\/v1\/?.*$/i, '').replace(/\/+$/, '');
+  }
+}
+
+export function isSecretSupabaseKey(rawKey: string): boolean {
+  const key = (rawKey || '').trim();
+  if (!key) return false;
+  if (key.startsWith('sb_secret_')) return true;
+  if (key.startsWith('eyJ') && key.split('.').length === 3) {
+    try {
+      const payload = JSON.parse(atob(key.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
+      if (payload?.role === 'service_role') return true;
+    } catch {
+      // ignore decode error
+    }
+  }
+  return false;
+}
+
 export function getSupabaseCredentials(): { url: string; anonKey: string } {
   const envUrl = (import.meta as any).env?.VITE_SUPABASE_URL || '';
   const envKey = (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || '';
@@ -13,7 +40,7 @@ export function getSupabaseCredentials(): { url: string; anonKey: string } {
   const localKey = typeof window !== 'undefined' ? localStorage.getItem(STORAGE_KEY_KEY) || '' : '';
 
   return {
-    url: (localUrl || envUrl).trim(),
+    url: normalizeSupabaseUrl(localUrl || envUrl),
     anonKey: (localKey || envKey).trim(),
   };
 }
@@ -21,8 +48,9 @@ export function getSupabaseCredentials(): { url: string; anonKey: string } {
 let supabaseInstance: SupabaseClient | null = null;
 
 export function saveSupabaseCredentials(url: string, anonKey: string) {
+  const normalizedUrl = normalizeSupabaseUrl(url);
   if (typeof window !== 'undefined') {
-    if (url.trim()) localStorage.setItem(STORAGE_KEY_URL, url.trim());
+    if (normalizedUrl) localStorage.setItem(STORAGE_KEY_URL, normalizedUrl);
     else localStorage.removeItem(STORAGE_KEY_URL);
 
     if (anonKey.trim()) localStorage.setItem(STORAGE_KEY_KEY, anonKey.trim());
@@ -34,7 +62,7 @@ export function saveSupabaseCredentials(url: string, anonKey: string) {
 
 export function getSupabase(): SupabaseClient | null {
   const { url, anonKey } = getSupabaseCredentials();
-  if (!url || !anonKey) {
+  if (!url || !anonKey || isSecretSupabaseKey(anonKey)) {
     return null;
   }
   if (!supabaseInstance) {
@@ -337,12 +365,29 @@ export async function testSupabaseConnection(): Promise<{
   tablesReady: boolean;
   message: string;
 }> {
+  const { url, anonKey } = getSupabaseCredentials();
+  if (!url || !anonKey) {
+    return {
+      connected: false,
+      tablesReady: false,
+      message: 'Informe a Project URL (ex: https://xxx.supabase.co) e a Publishable / Anon Public Key do Supabase.',
+    };
+  }
+
+  if (isSecretSupabaseKey(anonKey)) {
+    return {
+      connected: false,
+      tablesReady: false,
+      message: 'Você inseriu uma Secret Key (sb_secret_... ou service_role), que é bloqueada no navegador por segurança. No Supabase, vá em Settings → API Keys e copie a chave pública (Publishable key "sb_publishable_..." ou anon public "eyJ...").',
+    };
+  }
+
   const sb = getSupabase();
   if (!sb) {
     return {
       connected: false,
       tablesReady: false,
-      message: 'Informe a Project URL e a Anon Public Key do Supabase acima.',
+      message: 'Não foi possível inicializar a conexão com o Supabase. Verifique a URL.',
     };
   }
 
@@ -356,6 +401,13 @@ export async function testSupabaseConnection(): Promise<{
     const firstError = hqRes.error || sellerRes.error || orderRes.error;
     if (firstError) {
       const msg = firstError.message || '';
+      if (msg.includes('Forbidden use of secret API key')) {
+        return {
+          connected: false,
+          tablesReady: false,
+          message: 'Você inseriu a Secret Key do Supabase. Substitua pela Publishable Key (sb_publishable_...) ou Anon Public Key (eyJ...) em Settings → API Keys no Supabase.',
+        };
+      }
       if (msg.includes('does not exist') || msg.includes('schema cache') || firstError.code === '42P01' || firstError.code === 'PGRST205') {
         return {
           connected: true,
@@ -367,7 +419,7 @@ export async function testSupabaseConnection(): Promise<{
         return {
           connected: false,
           tablesReady: false,
-          message: `Chave Anon Key ou URL do Supabase inválida: ${msg}`,
+          message: `Chave pública ou URL do Supabase inválida: ${msg}`,
         };
       }
       return {
