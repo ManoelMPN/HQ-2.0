@@ -21,6 +21,17 @@ import { DiscountNegotiationModal } from './components/DiscountNegotiationModal.
 import { PartnerOnboardingModal } from './components/PartnerOnboardingModal.tsx';
 import { AdminPage } from './components/AdminPage.tsx';
 import { HQMasterLogo } from './components/HQMasterLogo.tsx';
+import {
+  getSupabase,
+  testSupabaseConnection,
+  fetchAllFromSupabase,
+  upsertHQToSupabase,
+  deleteHQFromSupabase,
+  upsertSellerToSupabase,
+  deleteSellerFromSupabase,
+  upsertOrderToSupabase,
+  upsertProposalToSupabase,
+} from './utils/supabaseClient.ts';
 
 const STORAGE_HQS = 'hqmaster_items_v4';
 const STORAGE_SELLERS = 'hqmaster_sellers_v4';
@@ -126,6 +137,19 @@ export default function App() {
   const [isPartnerModalOpen, setIsPartnerModalOpen] = useState(false);
   const [isNegotiationOpen, setIsNegotiationOpen] = useState(false);
 
+  // Supabase Cloud Sync Status
+  const [supabaseStatus, setSupabaseStatus] = useState<{
+    connected: boolean;
+    tablesReady: boolean;
+    syncing: boolean;
+    message: string;
+  }>({
+    connected: Boolean(getSupabase()),
+    tablesReady: false,
+    syncing: false,
+    message: getSupabase() ? 'Conectando ao Supabase...' : 'Modo local (configure o Supabase nas Configurações)',
+  });
+
   // Sync hash with current view
   useEffect(() => {
     const handleHashChange = () => {
@@ -142,34 +166,149 @@ export default function App() {
     else window.location.hash = '#loja';
   };
 
-  // Sync state to localStorage
+  // Safe localStorage helper (never crashes if base64 exceeds 5MB browser quota)
+  const safeSetStorage = (key: string, value: unknown) => {
+    try {
+      localStorage.setItem(key, JSON.stringify(value));
+    } catch (e) {
+      console.warn(`LocalStorage warning for ${key}:`, e);
+    }
+  };
+
+  // Sync state to localStorage safely
   useEffect(() => {
-    localStorage.setItem(STORAGE_HQS, JSON.stringify(hqs));
+    safeSetStorage(STORAGE_HQS, hqs);
   }, [hqs]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_SELLERS, JSON.stringify(sellers));
+    safeSetStorage(STORAGE_SELLERS, sellers);
   }, [sellers]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_CART, JSON.stringify(cart));
+    safeSetStorage(STORAGE_CART, cart);
   }, [cart]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_PROPOSALS, JSON.stringify(proposals));
+    safeSetStorage(STORAGE_PROPOSALS, proposals);
   }, [proposals]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_ORDERS, JSON.stringify(orders));
+    safeSetStorage(STORAGE_ORDERS, orders);
   }, [orders]);
 
   useEffect(() => {
-    if (currentSeller) {
-      localStorage.setItem(STORAGE_SESSION, JSON.stringify(currentSeller));
-    } else {
-      localStorage.removeItem(STORAGE_SESSION);
+    try {
+      if (currentSeller) {
+        localStorage.setItem(STORAGE_SESSION, JSON.stringify(currentSeller));
+      } else {
+        localStorage.removeItem(STORAGE_SESSION);
+      }
+    } catch (e) {
+      console.warn('Session storage warning:', e);
     }
   }, [currentSeller]);
+
+  // Full bidirectional sync with Supabase
+  const syncWithSupabase = async (pushLocalFirst = false): Promise<{
+    connected: boolean;
+    tablesReady: boolean;
+    message: string;
+  }> => {
+    const sb = getSupabase();
+    if (!sb) {
+      const status = {
+        connected: false,
+        tablesReady: false,
+        syncing: false,
+        message: 'Supabase não configurado. Informe URL e Anon Key para salvar na nuvem.',
+      };
+      setSupabaseStatus(status);
+      return status;
+    }
+
+    setSupabaseStatus((prev) => ({ ...prev, syncing: true }));
+
+    const test = await testSupabaseConnection();
+    if (!test.connected || !test.tablesReady) {
+      const status = {
+        connected: test.connected,
+        tablesReady: test.tablesReady,
+        syncing: false,
+        message: test.message,
+      };
+      setSupabaseStatus(status);
+      return status;
+    }
+
+    try {
+      // If user just clicked "Connect/Save" with unsaved local items, push local records first
+      if (pushLocalFirst) {
+        for (const s of sellers) {
+          await upsertSellerToSupabase(s);
+        }
+        for (const h of hqs) {
+          await upsertHQToSupabase(h);
+        }
+        for (const o of orders) {
+          await upsertOrderToSupabase(o);
+        }
+        for (const p of proposals) {
+          await upsertProposalToSupabase(p);
+        }
+      }
+
+      const remote = await fetchAllFromSupabase();
+      if (remote.ok) {
+        if (remote.sellers && remote.sellers.length > 0) {
+          setSellers(remote.sellers);
+          setCurrentSeller((prev) => {
+            if (!prev) return null;
+            return remote.sellers!.find((rs) => rs.id === prev.id || rs.email === prev.email) || prev;
+          });
+        } else {
+          // Ensure master exists in remote sellers table
+          for (const s of sellers) {
+            await upsertSellerToSupabase(s);
+          }
+        }
+
+        if (remote.hqs) {
+          setHqs(remote.hqs);
+        }
+        if (remote.orders) {
+          setOrders(remote.orders);
+        }
+        if (remote.proposals) {
+          setProposals(remote.proposals);
+        }
+      }
+
+      const okStatus = {
+        connected: true,
+        tablesReady: true,
+        syncing: false,
+        message: 'Supabase conectado e sincronizado em nuvem.',
+      };
+      setSupabaseStatus(okStatus);
+      return okStatus;
+    } catch (err: any) {
+      const errStatus = {
+        connected: true,
+        tablesReady: false,
+        syncing: false,
+        message: err?.message || 'Erro ao sincronizar com Supabase.',
+      };
+      setSupabaseStatus(errStatus);
+      return errStatus;
+    }
+  };
+
+  // Load initial cloud state on mount if Supabase credentials exist
+  useEffect(() => {
+    if (getSupabase()) {
+      void syncWithSupabase(false);
+    }
+  }, []);
 
   // Derived data for dynamic filters
   const availablePublishers = Array.from(new Set(hqs.map((h) => h.publisher))).sort();
@@ -197,7 +336,7 @@ export default function App() {
     setCart([]);
   };
 
-  // HQ Management
+  // HQ Management (State + Supabase Cloud Persistence)
   const handleAddHQ = (newHQData: Omit<HQItem, 'id' | 'createdAt'>) => {
     const newHQ: HQItem = {
       ...newHQData,
@@ -205,14 +344,22 @@ export default function App() {
       createdAt: new Date().toISOString(),
     };
     setHqs((prev) => [newHQ, ...prev]);
+
+    void upsertHQToSupabase(newHQ).then((res) => {
+      if (res.ok && res.hq) {
+        setHqs((prev) => prev.map((item) => (item.id === newHQ.id ? res.hq : item)));
+      }
+    });
   };
 
   const handleUpdateHQ = (updated: HQItem) => {
     setHqs((prev) => prev.map((h) => (h.id === updated.id ? updated : h)));
+    void upsertHQToSupabase(updated);
   };
 
   const handleDeleteHQ = (id: string) => {
     setHqs((prev) => prev.filter((h) => h.id !== id));
+    void deleteHQFromSupabase(id);
   };
 
   const handleClearDemoHQs = () => {
@@ -234,18 +381,30 @@ export default function App() {
       joinedAt: new Date().toISOString(),
     };
     setSellers((prev) => [...prev, newSeller]);
+    void upsertSellerToSupabase(newSeller);
   };
 
   const handleDeleteSeller = (id: string) => {
     setSellers((prev) => prev.filter((s) => s.id !== id || s.role === 'master'));
+    void deleteSellerFromSupabase(id);
   };
 
   const handleUpdateSellerPassword = (sellerId: string, newPass: string) => {
+    let updatedRef: Seller | null = null;
     setSellers((prev) =>
-      prev.map((s) => (s.id === sellerId ? { ...s, password: newPass } : s))
+      prev.map((s) => {
+        if (s.id === sellerId) {
+          updatedRef = { ...s, password: newPass };
+          return updatedRef;
+        }
+        return s;
+      })
     );
     if (currentSeller && currentSeller.id === sellerId) {
       setCurrentSeller((prev) => (prev ? { ...prev, password: newPass } : null));
+    }
+    if (updatedRef) {
+      void upsertSellerToSupabase(updatedRef);
     }
   };
 
@@ -256,6 +415,7 @@ export default function App() {
     if (currentSeller && (currentSeller.id === updatedSeller.id || currentSeller.role === 'master')) {
       setCurrentSeller(updatedSeller);
     }
+    void upsertSellerToSupabase(updatedSeller);
   };
 
   const handleLoginSeller = (email: string, pass: string): boolean => {
@@ -309,9 +469,11 @@ export default function App() {
     };
 
     setProposals((prev) => [newProposal, ...prev]);
+    void upsertProposalToSupabase(newProposal);
   };
 
   const handleUpdateProposalApproval = (proposalId: string, sellerId: string, decision: 'accepted' | 'declined') => {
+    let updatedProp: DiscountProposal | null = null;
     setProposals((prev) =>
       prev.map((prop) => {
         if (prop.id !== proposalId) return prop;
@@ -322,18 +484,23 @@ export default function App() {
         if (values.some((v) => v === 'declined')) newStatus = 'rejected';
         else if (values.every((v) => v === 'accepted')) newStatus = 'approved';
 
-        return {
+        updatedProp = {
           ...prop,
           sellerApprovals: updatedApprovals,
           status: newStatus,
         };
+        return updatedProp;
       })
     );
+    if (updatedProp) {
+      void upsertProposalToSupabase(updatedProp);
+    }
   };
 
   // Order Management
   const handleOrderCreated = (order: Order) => {
     setOrders((prev) => [order, ...prev]);
+    void upsertOrderToSupabase(order);
 
     // Update real sales stats per seller only from actual orders
     const salesBySeller: Record<string, { count: number; total: number }> = {};
@@ -349,25 +516,47 @@ export default function App() {
       prev.map((s) => {
         const delta = salesBySeller[s.id];
         if (!delta) return s;
-        return {
+        const updated = {
           ...s,
           totalSales: (s.totalSales || 0) + delta.count,
           totalEarnings: Number(((s.totalEarnings || 0) + delta.total).toFixed(2)),
         };
+        void upsertSellerToSupabase(updated);
+        return updated;
       })
     );
   };
 
   const handleUpdateOrderTracking = (orderId: string, trackingCode: string) => {
+    let updatedOrd: Order | null = null;
     setOrders((prev) =>
-      prev.map((ord) => (ord.id === orderId ? { ...ord, trackingCode } : ord))
+      prev.map((ord) => {
+        if (ord.id === orderId) {
+          updatedOrd = { ...ord, trackingCode };
+          return updatedOrd;
+        }
+        return ord;
+      })
     );
+    if (updatedOrd) {
+      void upsertOrderToSupabase(updatedOrd);
+    }
   };
 
   const handleReleasePayout = (orderId: string) => {
+    let updatedOrd: Order | null = null;
     setOrders((prev) =>
-      prev.map((ord) => (ord.id === orderId ? { ...ord, payoutReleasedToPartners: true } : ord))
+      prev.map((ord) => {
+        if (ord.id === orderId) {
+          updatedOrd = { ...ord, payoutReleasedToPartners: true };
+          return updatedOrd;
+        }
+        return ord;
+      })
     );
+    if (updatedOrd) {
+      void upsertOrderToSupabase(updatedOrd);
+    }
   };
 
   const masterSeller = sellers.find((s) => s.role === 'master') || sellers[0];
@@ -396,6 +585,8 @@ export default function App() {
         orders={orders}
         onUpdateOrderTracking={handleUpdateOrderTracking}
         onReleasePayout={handleReleasePayout}
+        supabaseStatus={supabaseStatus}
+        onSyncSupabase={() => syncWithSupabase(true)}
       />
     );
   }

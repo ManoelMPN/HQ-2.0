@@ -58,6 +58,13 @@ interface AdminPageProps {
   orders: Order[];
   onUpdateOrderTracking: (orderId: string, trackingCode: string) => void;
   onReleasePayout: (orderId: string) => void;
+  supabaseStatus?: {
+    connected: boolean;
+    tablesReady: boolean;
+    syncing: boolean;
+    message: string;
+  };
+  onSyncSupabase?: () => Promise<{ connected: boolean; tablesReady: boolean; message: string }>;
 }
 
 export const AdminPage: React.FC<AdminPageProps> = ({
@@ -80,6 +87,8 @@ export const AdminPage: React.FC<AdminPageProps> = ({
   orders,
   onUpdateOrderTracking,
   onReleasePayout,
+  supabaseStatus,
+  onSyncSupabase,
 }) => {
   // Login form state
   const [loginEmail, setLoginEmail] = useState('');
@@ -144,6 +153,8 @@ export const AdminPage: React.FC<AdminPageProps> = ({
   const [sbKey, setSbKey] = useState(currentCreds.anonKey);
   const [copiedSql, setCopiedSql] = useState(false);
   const [sbSavedMsg, setSbSavedMsg] = useState(false);
+  const [testingSupabase, setTestingSupabase] = useState(false);
+  const [sbTestResult, setSbTestResult] = useState<{ connected: boolean; tablesReady: boolean; message: string } | null>(null);
 
   // Stored Keys
   const [geminiKeyInput, setGeminiKeyInput] = useState(() => localStorage.getItem('hq_master_gemini_key') || '');
@@ -166,6 +177,28 @@ export const AdminPage: React.FC<AdminPageProps> = ({
       setFormSellerId(currentSeller.id);
     }
   }, [currentSeller]);
+
+  // Keep owner form synced when cloud data loads from Supabase
+  useEffect(() => {
+    if (masterSeller && masterSeller.role === 'master') {
+      setOwnerName(masterSeller.name || 'Neto');
+      setOwnerStoreName(masterSeller.storeName || 'HQ Master');
+      setOwnerEmail(masterSeller.email || 'neto.mmp@gmail.com');
+      setOwnerPhone(masterSeller.phone || '');
+      setOwnerCpfCnpj(masterSeller.cpfCnpj || '');
+      setOwnerCep(masterSeller.cep || '01310-100');
+      setOwnerStreet(masterSeller.street || '');
+      setOwnerNumber(masterSeller.number || '');
+      setOwnerComplement(masterSeller.complement || '');
+      setOwnerNeighborhood(masterSeller.neighborhood || '');
+      setOwnerCity(masterSeller.city || '');
+      setOwnerState(masterSeller.state || '');
+      setOwnerPixKeyType(masterSeller.pixKeyType || 'email');
+      setOwnerPixKey(masterSeller.pixKey || masterSeller.email || 'neto.mmp@gmail.com');
+      setOwnerBankName(masterSeller.bankName || '');
+      setOwnerAccountHolder(masterSeller.accountHolder || masterSeller.name || 'Neto MMP');
+    }
+  }, [masterSeller?.id, masterSeller?.name, masterSeller?.email, masterSeller?.cep, masterSeller?.pixKey, masterSeller?.address]);
 
   // Handle Login
   const handleDoLogin = (e: React.FormEvent) => {
@@ -420,12 +453,34 @@ export const AdminPage: React.FC<AdminPageProps> = ({
     setTimeout(() => setKeysSavedMsg(false), 3000);
   };
 
-  // Save Supabase Config
-  const handleSaveSupabaseConfig = (e: React.FormEvent) => {
+  // Save & Immediately Sync Supabase Config
+  const handleSaveSupabaseConfig = async (e: React.FormEvent) => {
     e.preventDefault();
     saveSupabaseCredentials(sbUrl, sbKey);
     setSbSavedMsg(true);
     setTimeout(() => setSbSavedMsg(false), 3000);
+
+    if (onSyncSupabase) {
+      setTestingSupabase(true);
+      try {
+        const res = await onSyncSupabase();
+        setSbTestResult(res);
+      } finally {
+        setTestingSupabase(false);
+      }
+    }
+  };
+
+  const handleTestAndSyncSupabase = async () => {
+    saveSupabaseCredentials(sbUrl, sbKey);
+    if (!onSyncSupabase) return;
+    setTestingSupabase(true);
+    try {
+      const res = await onSyncSupabase();
+      setSbTestResult(res);
+    } finally {
+      setTestingSupabase(false);
+    }
   };
 
   const handleCopySql = () => {
@@ -556,7 +611,29 @@ export const AdminPage: React.FC<AdminPageProps> = ({
           </div>
 
           {currentSeller && (
-            <div className="flex items-center gap-3 text-xs">
+            <div className="flex items-center gap-2 sm:gap-3 text-xs flex-wrap">
+              {supabaseStatus && (
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('settings')}
+                  className={`px-2.5 py-1 rounded-lg border text-[11px] font-semibold flex items-center gap-1.5 ${
+                    supabaseStatus.tablesReady
+                      ? 'bg-emerald-950/50 border-emerald-700/60 text-emerald-300'
+                      : 'bg-zinc-900 border-zinc-700 text-zinc-400 hover:text-white'
+                  }`}
+                  title={supabaseStatus.message}
+                >
+                  <Database className="w-3 h-3" />
+                  <span>
+                    {supabaseStatus.syncing
+                      ? 'Sincronizando...'
+                      : supabaseStatus.tablesReady
+                      ? 'Nuvem Supabase Ativa'
+                      : 'Modo Local'}
+                  </span>
+                </button>
+              )}
+
               <span className="text-zinc-300">
                 Olá, <strong className="text-white">{currentSeller.name}</strong>{' '}
                 <span className="text-amber-400 font-bold">
@@ -1887,23 +1964,53 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                     />
                   </div>
 
-                  <div className="sm:col-span-2 pt-1 flex items-center gap-3">
+                  <div className="sm:col-span-2 pt-1 flex flex-wrap items-center gap-2.5">
                     <button
                       type="submit"
-                      className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-4 py-2 rounded-xl text-xs shadow"
+                      disabled={testingSupabase}
+                      className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-4 py-2 rounded-xl text-xs shadow disabled:opacity-60"
                     >
-                      Salvar Conexão Supabase
+                      {testingSupabase ? 'Conectando e Sincronizando...' : 'Salvar e Sincronizar com Supabase'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleTestAndSyncSupabase}
+                      disabled={testingSupabase}
+                      className="bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 text-emerald-400 ${testingSupabase ? 'animate-spin' : ''}`} />
+                      Testar Conexão
                     </button>
                     <button
                       type="button"
                       onClick={handleCopySql}
-                      className="bg-zinc-800 hover:bg-zinc-750 text-zinc-200 border border-zinc-700 px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5"
+                      className="bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5"
                     >
                       {copiedSql ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
                       {copiedSql ? 'SQL Copiado!' : 'Copiar Código SQL para Criar Tabelas'}
                     </button>
                   </div>
+
+                  {(sbTestResult || supabaseStatus) && (
+                    <div
+                      className={`sm:col-span-2 p-3 rounded-xl border text-xs ${
+                        (sbTestResult?.tablesReady ?? supabaseStatus?.tablesReady)
+                          ? 'bg-emerald-950/40 border-emerald-700/60 text-emerald-300'
+                          : 'bg-amber-950/40 border-amber-700/60 text-amber-200'
+                      }`}
+                    >
+                      <strong>Status do Banco: </strong>
+                      {sbTestResult?.message || supabaseStatus?.message}
+                    </div>
+                  )}
                 </form>
+
+                <div className="bg-zinc-950/80 border border-zinc-800 rounded-xl p-3 text-[11px] text-zinc-400 space-y-1">
+                  <strong className="text-zinc-200 block">Passo importante para salvar tudo na nuvem (inclusive na Vercel):</strong>
+                  <p>1. No painel do seu projeto Supabase, abra <strong>SQL Editor → New Query</strong>, cole o SQL abaixo e clique em <strong>RUN</strong>.</p>
+                  <p>2. Cole aqui a <strong>Project URL</strong> e a <strong>Anon Public Key</strong> (Settings → API no Supabase) e clique em <strong>Salvar e Sincronizar com Supabase</strong>.</p>
+                  <p>3. Para funcionar automaticamente para todos os seus clientes na Vercel, cadastre também <code className="text-amber-300">VITE_SUPABASE_URL</code>, <code className="text-amber-300">VITE_SUPABASE_ANON_KEY</code>, <code className="text-amber-300">GEMINI_API_KEY</code> e <code className="text-amber-300">MERCADO_PAGO_ACCESS_TOKEN</code> nas <strong>Environment Variables</strong> da Vercel.</p>
+                </div>
 
                 <pre className="bg-zinc-950 p-3 rounded-xl text-[11px] text-zinc-400 font-mono overflow-x-auto max-h-40 border border-zinc-800">
                   {SUPABASE_SQL_SCHEMA}
