@@ -268,7 +268,16 @@ export const AdminPage: React.FC<AdminPageProps> = ({
         const d = json.data;
         setFormTitle(d.title || formTitle);
         setFormDescription(d.description || formDescription);
-        if (d.publisher) setFormPublisher(d.publisher);
+        if (d.publisher) {
+          const pubLower = String(d.publisher).toLowerCase();
+          if (pubLower.includes('abril')) setFormPublisher('Editora Abril');
+          else if (pubLower.includes('panini')) setFormPublisher('Panini');
+          else if (pubLower.includes('marvel')) setFormPublisher('Marvel');
+          else if (pubLower.includes('dc')) setFormPublisher('DC Comics');
+          else if (pubLower.includes('image')) setFormPublisher('Image Comics');
+          else if (pubLower.includes('dark horse')) setFormPublisher('Dark Horse');
+          else setFormPublisher('Outra');
+        }
         setFormSeries(d.series || formSeries);
         setFormIssueNumber(d.issueNumber || formIssueNumber);
         setFormYear(Number(d.yearEstimate) || formYear);
@@ -1769,20 +1778,28 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                         setGeminiKeyInput(e.target.value);
                         setTestAiResult(null);
                       }}
-                      placeholder="AIzaSy..."
+                      placeholder="AQ.Ab8RN... ou AIzaSy..."
                       className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3.5 py-2 text-xs text-white font-mono"
                     />
 
-                    {/* Format Indicator */}
+                    {/* Format Indicator (Supports 2026 AQ. Authentication Keys & Classic AIzaSy Keys) */}
                     {geminiKeyInput.trim().length > 0 && (
                       <div className="mt-1.5 text-[11px]">
-                        {geminiKeyInput.trim().startsWith('AIzaSy') ? (
+                        {/^aq\./i.test(geminiKeyInput.trim()) || /^aq[a-z0-9_-]{10,}/i.test(geminiKeyInput.trim()) ? (
                           <span className="text-emerald-400 font-semibold flex items-center gap-1">
-                            <CheckCircle2 className="w-3.5 h-3.5" /> Formato de chave Google Gemini válido (inicia com AIzaSy).
+                            <CheckCircle2 className="w-3.5 h-3.5" /> Formato válido: Chave de Autenticação Google AI Studio (padrão 2026: AQ.).
+                          </span>
+                        ) : geminiKeyInput.trim().startsWith('AIzaSy') ? (
+                          <span className="text-emerald-400 font-semibold flex items-center gap-1">
+                            <CheckCircle2 className="w-3.5 h-3.5" /> Formato válido: Chave Clássica Google Gemini (AIzaSy).
+                          </span>
+                        ) : geminiKeyInput.trim().startsWith('APP_USR-') || geminiKeyInput.trim().startsWith('TEST-') ? (
+                          <span className="text-rose-400 font-semibold flex items-center gap-1">
+                            <AlertCircle className="w-3.5 h-3.5" /> Atenção: Esta chave pertence ao Mercado Pago (APP_USR-/TEST-). Cole-a no campo Mercado Pago logo abaixo.
                           </span>
                         ) : (
-                          <span className="text-rose-400 font-semibold flex items-center gap-1">
-                            <AlertCircle className="w-3.5 h-3.5" /> Atenção: Chaves do Google Gemini sempre começam com "AIzaSy". A chave informada parece ser de outro serviço (Mercado Pago, OAuth ou Supabase).
+                          <span className="text-amber-400 font-semibold flex items-center gap-1">
+                            <Info className="w-3.5 h-3.5" /> Clique em &quot;Testar Conexão com Gemini&quot; para validar sua chave diretamente no Google AI Studio.
                           </span>
                         )}
                       </div>

@@ -234,7 +234,19 @@ export function evaluateProposalStatus(
   return 'pending';
 }
 
-export function calculateAccurateFreight(buyerCep: string, sellerCep: string = '01310-100', itemCount: number = 1) {
+export interface PostalFreightOption {
+  code: string;
+  name: string;
+  price: number;
+  days: string;
+  insuranceIncluded: boolean;
+}
+
+export function calculateAccurateFreight(
+  buyerCep: string,
+  sellerCep: string = '01310-100',
+  itemCount: number = 1
+): PostalFreightOption[] | null {
   const cleanBuyer = buyerCep.replace(/\D/g, '');
   const cleanSeller = sellerCep.replace(/\D/g, '');
 

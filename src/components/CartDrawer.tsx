@@ -131,9 +131,9 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
   const recalculateFreight = (cleanCep: string) => {
     setLoadingFreight(true);
     try {
-      const options = calculateAccurateFreight(cleanCep, sellerOriginCep, totalItemsCount);
+      const options = calculateAccurateFreight(cleanCep, sellerOriginCep, totalItemsCount) || [];
       setShippingOptions(options);
-      if (!selectedShipping || !options.some((o) => o.code === selectedShipping.code)) {
+      if (options.length > 0 && (!selectedShipping || !options.some((o) => o.code === selectedShipping.code))) {
         setSelectedShipping(options[0]);
       }
     } finally {
@@ -223,10 +223,13 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
     };
 
     try {
-      // Send to backend preference
-      await fetch('/api/mercadopago/create-preference', {
+      const mpToken = (localStorage.getItem('hq_master_mp_token') || '').trim();
+      const res = await fetch('/api/mercadopago/create-preference', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(mpToken ? { 'x-mp-access-token': mpToken } : {}),
+        },
         body: JSON.stringify({
           items: cart.map((c) => ({
             id: c.hq.id,
@@ -250,6 +253,13 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
           storePixKey,
         }),
       });
+      if (res.ok) {
+        const data = await res.json();
+        if (data?.initPoint) {
+          newOrder.mercadopagoPaymentLink = data.initPoint;
+          newOrder.mercadopagoPreferenceId = data.preferenceId;
+        }
+      }
     } catch (e) {
       console.warn('API checkout logged offline, continuing in-store PIX order:', e);
     } finally {
@@ -805,6 +815,18 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                 </div>
 
                 <div className="space-y-2 pt-2">
+                  {createdOrder.mercadopagoPaymentLink && (
+                    <a
+                      href={createdOrder.mercadopagoPaymentLink}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="w-full bg-gradient-to-r from-[#009ee3] to-[#0081ba] hover:brightness-110 text-white font-bold py-3 px-4 rounded-xl text-xs flex items-center justify-center gap-2 shadow-lg transition-transform active:scale-95"
+                    >
+                      <ExternalLink className="w-4 h-4" />
+                      Pagar via Checkout Mercado Pago
+                    </a>
+                  )}
+
                   <button
                     onClick={handleCopyPixCode}
                     className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3 px-4 rounded-xl text-xs flex items-center justify-center gap-2 shadow-lg transition-transform active:scale-95"

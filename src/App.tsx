@@ -51,10 +51,14 @@ export default function App() {
   const [sellers, setSellers] = useState<Seller[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_SELLERS);
+      const savedOrders = localStorage.getItem(STORAGE_ORDERS);
+      const hasRealOrders = savedOrders ? JSON.parse(savedOrders).length > 0 : false;
       if (saved) {
         const parsed = JSON.parse(saved) as Seller[];
-        // Ensure master always has 0 sales unless real orders exist
-        return parsed.map((s) => (s.role === 'master' ? { ...s, totalSales: 0, totalEarnings: 0 } : s));
+        // Only reflect real orders; if 0 orders, sales & earnings are strictly 0
+        return hasRealOrders
+          ? parsed
+          : parsed.map((s) => ({ ...s, totalSales: 0, totalEarnings: 0 }));
       }
       return INITIAL_SELLERS;
     } catch {
@@ -245,6 +249,15 @@ export default function App() {
     }
   };
 
+  const handleUpdateOwnerProfile = (updatedSeller: Seller) => {
+    setSellers((prev) =>
+      prev.map((s) => (s.id === updatedSeller.id || s.role === 'master' ? updatedSeller : s))
+    );
+    if (currentSeller && (currentSeller.id === updatedSeller.id || currentSeller.role === 'master')) {
+      setCurrentSeller(updatedSeller);
+    }
+  };
+
   const handleLoginSeller = (email: string, pass: string): boolean => {
     const trimmedEmail = email.trim().toLowerCase();
     const master = sellers.find((s) => s.role === 'master') || sellers[0];
@@ -321,6 +334,28 @@ export default function App() {
   // Order Management
   const handleOrderCreated = (order: Order) => {
     setOrders((prev) => [order, ...prev]);
+
+    // Update real sales stats per seller only from actual orders
+    const salesBySeller: Record<string, { count: number; total: number }> = {};
+    order.items.forEach((item) => {
+      if (!salesBySeller[item.sellerId]) {
+        salesBySeller[item.sellerId] = { count: 0, total: 0 };
+      }
+      salesBySeller[item.sellerId].count += 1;
+      salesBySeller[item.sellerId].total += Number(item.price) || 0;
+    });
+
+    setSellers((prev) =>
+      prev.map((s) => {
+        const delta = salesBySeller[s.id];
+        if (!delta) return s;
+        return {
+          ...s,
+          totalSales: (s.totalSales || 0) + delta.count,
+          totalEarnings: Number(((s.totalEarnings || 0) + delta.total).toFixed(2)),
+        };
+      })
+    );
   };
 
   const handleUpdateOrderTracking = (orderId: string, trackingCode: string) => {
@@ -334,6 +369,8 @@ export default function App() {
       prev.map((ord) => (ord.id === orderId ? { ...ord, payoutReleasedToPartners: true } : ord))
     );
   };
+
+  const masterSeller = sellers.find((s) => s.role === 'master') || sellers[0];
 
   // 1. DEDICATED ADMIN PAGE VIEW
   if (currentView === 'admin') {
@@ -350,6 +387,7 @@ export default function App() {
         onAddSeller={handleAddSeller}
         onDeleteSeller={handleDeleteSeller}
         onUpdateSellerPassword={handleUpdateSellerPassword}
+        onUpdateOwnerProfile={handleUpdateOwnerProfile}
         currentSeller={currentSeller}
         onLoginSeller={handleLoginSeller}
         onLogoutSeller={handleLogoutSeller}
@@ -626,6 +664,8 @@ export default function App() {
           setIsNegotiationOpen(true);
         }}
         onOrderCreated={handleOrderCreated}
+        storePixKey={masterSeller?.pixKey || 'neto.mmp@gmail.com'}
+        sellerOriginCep={masterSeller?.cep || '01310-100'}
       />
 
       <DiscountNegotiationModal
