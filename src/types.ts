@@ -37,8 +37,20 @@ export interface Seller {
   email: string;
   role: 'master' | 'partner';
   password?: string;
+  phone?: string;
+  cpfCnpj?: string;
   cep: string;
   address: string;
+  street?: string;
+  number?: string;
+  neighborhood?: string;
+  city?: string;
+  state?: string;
+  complement?: string;
+  pixKeyType?: 'cpf' | 'email' | 'phone' | 'random';
+  pixKey?: string;
+  bankName?: string;
+  accountHolder?: string;
   totalSales: number;
   totalEarnings: number;
   active: boolean;
@@ -70,8 +82,16 @@ export interface Order {
   orderNumber: string;
   buyerName: string;
   buyerEmail: string;
+  buyerPhone?: string;
+  buyerCpf?: string;
   buyerCep: string;
   buyerAddress: string;
+  buyerStreet?: string;
+  buyerNumber?: string;
+  buyerNeighborhood?: string;
+  buyerCity?: string;
+  buyerState?: string;
+  buyerComplement?: string;
   items: {
     hqId: string;
     title: string;
@@ -88,6 +108,8 @@ export interface Order {
   paymentMethod: 'mercadopago' | 'pix';
   mercadopagoPreferenceId?: string;
   mercadopagoPaymentLink?: string;
+  pixQrCode?: string;
+  pixCopiaECola?: string;
   status: 'pending_payment' | 'paid' | 'shipping' | 'delivered';
   trackingCode?: string;
   payoutReleasedToPartners: boolean;

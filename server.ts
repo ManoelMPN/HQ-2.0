@@ -9,16 +9,58 @@ const app = express();
 const PORT = Number(process.env.PORT) || 3000;
 const isProduction = process.env.NODE_ENV === 'production';
 
-app.use(express.json({ limit: '30mb' }));
-app.use(express.urlencoded({ extended: true, limit: '30mb' }));
+// Support compressed base64 images from client
+app.use(express.json({ limit: '40mb' }));
+app.use(express.urlencoded({ extended: true, limit: '40mb' }));
 
-// Shared server-side Gemini client
-const geminiApiKey = process.env.GEMINI_API_KEY;
-let aiClient: GoogleGenAI | null = null;
+/**
+ * Validates whether a key matches known Google Gemini / AI Studio key formats:
+ * - New 2026 Google AI Studio Authentication Keys: start with "AQ." (case-insensitive check for "AQ")
+ * - Classic Google Gemini API Keys: start with "AIzaSy"
+ */
+function classifyGeminiKey(rawKey: string): {
+  isRecognized: boolean;
+  keyType: 'aq_auth_2026' | 'aiza_classic' | 'other_service' | 'unknown';
+  warning?: string;
+} {
+  const key = (rawKey || '').trim();
+  if (!key) {
+    return { isRecognized: false, keyType: 'unknown', warning: 'Chave vazia.' };
+  }
 
-if (geminiApiKey) {
-  aiClient = new GoogleGenAI({
-    apiKey: geminiApiKey,
+  // New 2026 Google AI Studio Authentication Keys (AQ.Ab8RN...)
+  if (/^aq\./i.test(key) || /^aq[a-z0-9_-]{10,}/i.test(key)) {
+    return { isRecognized: true, keyType: 'aq_auth_2026' };
+  }
+
+  // Classic Google API keys (AIzaSy...)
+  if (key.startsWith('AIzaSy')) {
+    return { isRecognized: true, keyType: 'aiza_classic' };
+  }
+
+  // Detect common non-Gemini keys to give helpful feedback
+  if (key.startsWith('APP_USR-') || key.startsWith('TEST-')) {
+    return {
+      isRecognized: false,
+      keyType: 'other_service',
+      warning: 'Esta chave começa com APP_USR-/TEST-, que pertence ao Mercado Pago e não ao Google Gemini.',
+    };
+  }
+
+  if (key.startsWith('eyJ') || key.startsWith('sb_')) {
+    return {
+      isRecognized: false,
+      keyType: 'other_service',
+      warning: 'Esta chave parece ser um token JWT / Supabase, não uma chave do Google Gemini.',
+    };
+  }
+
+  return { isRecognized: true, keyType: 'unknown' };
+}
+
+function createAiClient(apiKey: string): GoogleGenAI {
+  return new GoogleGenAI({
+    apiKey: apiKey.trim(),
     httpOptions: {
       headers: {
         'User-Agent': 'aistudio-build',
@@ -26,6 +68,111 @@ if (geminiApiKey) {
     },
   });
 }
+
+// Shared server-side Gemini client if env var exists
+const envGeminiKey = (process.env.GEMINI_API_KEY || '').trim();
+const defaultAiClient: GoogleGenAI | null = envGeminiKey ? createAiClient(envGeminiKey) : null;
+
+// Helper: call Gemini with automatic fallback between gemini-4-hydrogen and gemini-2.5-flash if needed
+async function generateCoverAnalysisWithGemini(
+  client: GoogleGenAI,
+  imageParts: Array<{ inlineData: { mimeType: string; data: string } }>,
+  systemInstruction: string,
+  userPrompt: string,
+  responseSchema: any
+): Promise<{ text: string; modelUsed: string }> {
+  const candidateModels = ['gemini-4-hydrogen', 'gemini-2.5-flash'];
+  let lastError: any = null;
+
+  for (const model of candidateModels) {
+    try {
+      const response = await client.models.generateContent({
+        model,
+        contents: {
+          parts: [...imageParts, { text: userPrompt }],
+        },
+        config: {
+          systemInstruction,
+          responseMimeType: 'application/json',
+          responseSchema,
+        },
+      });
+
+      if (response.text) {
+        return { text: response.text, modelUsed: model };
+      }
+    } catch (err: any) {
+      lastError = err;
+      const msg = (err?.message || '').toLowerCase();
+      // Only fall back to next model if the model name itself isn't found/supported;
+      // if it's an auth/key error, fail immediately with the real error.
+      if (msg.includes('api key') || msg.includes('unauthorized') || msg.includes('permission') || msg.includes('401') || msg.includes('403')) {
+        throw err;
+      }
+      console.warn(`Model ${model} failed, trying fallback if available:`, err?.message);
+    }
+  }
+
+  throw lastError || new Error('Nenhum modelo Gemini retornou resposta.');
+}
+
+// 0. Test & Validate Gemini API Key endpoint
+app.post('/api/gemini/validate-key', async (req, res) => {
+  try {
+    const { apiKey } = req.body;
+    const cleanKey = (apiKey || '').trim();
+
+    if (!cleanKey) {
+      return res.status(400).json({
+        valid: false,
+        error: 'Chave não informada.',
+      });
+    }
+
+    const check = classifyGeminiKey(cleanKey);
+    if (!check.isRecognized && check.keyType === 'other_service') {
+      return res.status(400).json({
+        valid: false,
+        isInvalidFormat: true,
+        error: check.warning,
+      });
+    }
+
+    const testClient = createAiClient(cleanKey);
+    const candidateModels = ['gemini-4-hydrogen', 'gemini-2.5-flash'];
+    let lastError: any = null;
+
+    for (const model of candidateModels) {
+      try {
+        const response = await testClient.models.generateContent({
+          model,
+          contents: 'Responda apenas: OK',
+        });
+        if (response.text) {
+          return res.json({
+            valid: true,
+            model,
+            keyFormat: check.keyType === 'aq_auth_2026' ? 'Chave de Autenticação Google AI Studio (AQ.)' : 'Chave Google Gemini',
+            message: `Chave validada e conectada com sucesso ao modelo ${model}!`,
+          });
+        }
+      } catch (err: any) {
+        lastError = err;
+        const msg = (err?.message || '').toLowerCase();
+        if (msg.includes('api key') || msg.includes('unauthorized') || msg.includes('permission') || msg.includes('401') || msg.includes('403')) {
+          throw err;
+        }
+      }
+    }
+
+    throw lastError || new Error('Não foi possível validar a chave com a API do Google.');
+  } catch (err: any) {
+    return res.status(400).json({
+      valid: false,
+      error: `Erro ao validar chave com o Google: ${err?.message || 'Chave inválida ou sem permissão'}`,
+    });
+  }
+});
 
 // 1. Gemini Vision Cover Analysis (Single or Multi-cover Lot Recognition)
 app.post('/api/gemini/analyze-cover', async (req, res) => {
@@ -45,164 +192,158 @@ app.post('/api/gemini/analyze-cover', async (req, res) => {
     }
 
     if (allImages.length === 0) {
-      return res.status(400).json({ error: 'Nenhuma foto enviada para análise.' });
-    }
-
-    const customApiKey = req.headers['x-gemini-api-key'] as string;
-    let localAiClient = aiClient;
-    if (customApiKey && (!localAiClient || customApiKey !== process.env.GEMINI_API_KEY)) {
-      localAiClient = new GoogleGenAI({
-        apiKey: customApiKey,
-        httpOptions: {
-          headers: {
-            'User-Agent': 'aistudio-build',
-          },
-        },
+      return res.status(400).json({
+        success: false,
+        error: 'Nenhuma foto enviada para análise.',
       });
     }
 
-    const franchisesPrompt = existingFranchises.length > 0
-      ? `Categorias existentes no acervo: [${existingFranchises.join(', ')}]. Se o gibi pertencer a uma dessas, use exatamente o mesmo nome. Caso seja inédito (ex: Justiceiro, Demolidor, Spawn, Batman), crie uma nova categoria concisa.`
-      : 'Crie uma categoria concisa para o personagem ou franquia principal (ex: "Homem-Aranha", "Batman", "Superman", "Justiceiro", "X-Men").';
+    const customApiKey = ((req.headers['x-gemini-api-key'] as string) || '').trim();
+    const effectiveKey = customApiKey || envGeminiKey;
 
-    const systemInstruction = `Você é um avaliador e historiador de revistas em quadrinhos no Brasil (Editora Abril, Panini, EBAL, Mythos, etc.).
-Analise a capa ou conjunto de capas enviadas (${allImages.length} imagem/imagens) e retorne estritamente um JSON estruturado.
-Regras de Precificação e Lotes:
-1. Se houver mais de uma capa ou se a capa mostrar um lote/coleção, identifique se faz sentido vender como Lote Completo (coleção/saga sequencial).
-2. Forneça o preço da UNIDADE individual e o PREÇO DO LOTE COMPLETO com desconto justo de colecionador (aproximadamente 15% a 25% de desconto no lote).
-3. Se for uma edição avulsa única, o preço unitário e o preço total serão o mesmo.
-4. Gere uma sinopse direta, profissional e atraente (2 a 3 frases no máximo), focada no arco e personagens, sem frases clichês ou menções repetitivas de limpeza.`;
-
-    if (localAiClient) {
-      try {
-        const imageParts = allImages.slice(0, 5).map((b64) => ({
-          inlineData: {
-            mimeType,
-            data: b64.replace(/^data:image\/\w+;base64,/, ''),
-          },
-        }));
-
-        const response = await localAiClient.models.generateContent({
-          model: 'gemini-3.8-flash',
-          contents: {
-            parts: [
-              ...imageParts,
-              {
-                text: `Analise estas ${allImages.length} foto(s) de gibi(s) para catalogação na loja HQ Master. Identifique franquia, série, número, ano, estado de conservação, preço unitário e preço de lote com desconto se for coleção.`,
-              },
-            ],
-          },
-          config: {
-            systemInstruction,
-            responseMimeType: 'application/json',
-            responseSchema: {
-              type: Type.OBJECT,
-              properties: {
-                title: { type: Type.STRING, description: 'Título comercial do anúncio' },
-                publisher: { type: Type.STRING, description: 'Editora responsável' },
-                series: { type: Type.STRING, description: 'Série da revista' },
-                franchiseCategory: { type: Type.STRING, description: 'Franquia ou personagem' },
-                issueNumber: { type: Type.STRING, description: 'Número da edição ou intervalo de edições' },
-                yearEstimate: { type: Type.INTEGER, description: 'Ano aproximado de lançamento' },
-                suggestedPrice: { type: Type.NUMBER, description: 'Preço total do anúncio em BRL' },
-                unitPrice: { type: Type.NUMBER, description: 'Preço por exemplar avulso em BRL' },
-                bundlePrice: { type: Type.NUMBER, description: 'Preço promocional do lote completo em BRL' },
-                isCollection: { type: Type.BOOLEAN, description: 'Se é um lote ou coleção com múltiplas edições' },
-                collectionCount: { type: Type.INTEGER, description: 'Quantidade de edições na coleção' },
-                allowsUnitPurchase: { type: Type.BOOLEAN, description: 'Se permite comprar avulso além do lote' },
-                description: { type: Type.STRING, description: 'Descrição direta e concisa da história' },
-                conditionGradeSuggestion: { type: Type.STRING, description: 'Grau sugerido: otimo, bom, ruim ou leitura' },
-                keyCharacters: { type: Type.ARRAY, items: { type: Type.STRING }, description: 'Personagens' },
-              },
-              required: [
-                'title',
-                'publisher',
-                'series',
-                'franchiseCategory',
-                'issueNumber',
-                'yearEstimate',
-                'suggestedPrice',
-                'description',
-                'conditionGradeSuggestion',
-              ],
-            },
-          },
-        });
-
-        const rawText = response.text;
-        if (rawText) {
-          const parsed = JSON.parse(rawText);
-          const isNewCollection = !existingFranchises.some(
-            (f: string) => f.toLowerCase() === (parsed.franchiseCategory || '').toLowerCase()
-          );
-
-          const isCol = parsed.isCollection ?? (allImages.length > 1);
-          const count = parsed.collectionCount || (allImages.length > 1 ? allImages.length : 1);
-          const unit = parsed.unitPrice || parsed.suggestedPrice;
-          const bundle = parsed.bundlePrice || (isCol ? Math.round(unit * count * 0.82) : unit);
-
-          return res.json({
-            success: true,
-            source: 'gemini-3.8-flash',
-            data: {
-              ...parsed,
-              isCollection: isCol,
-              collectionCount: count,
-              unitPrice: unit,
-              bundlePrice: bundle,
-              allowsUnitPurchase: parsed.allowsUnitPurchase ?? isCol,
-              isNewCollectionCategory: isNewCollection,
-            },
-          });
-        }
-      } catch (geminiErr: any) {
-        console.warn('Gemini vision API error in server.ts:', geminiErr?.message);
-      }
+    if (!effectiveKey) {
+      return res.status(400).json({
+        success: false,
+        needsKey: true,
+        error: 'Chave do Google Gemini não configurada. Cole sua chave (AQ.... ou AIzaSy...) na aba "Configurações & Chaves" do Painel Admin.',
+      });
     }
 
-    const fallbackFranchise = existingFranchises.length > 0 ? existingFranchises[0] : 'Homem-Aranha';
-    const isMulti = allImages.length > 1;
-    const unitFallback = 25.0;
-    const countFallback = isMulti ? allImages.length : 1;
-    const bundleFallback = isMulti ? Math.round(unitFallback * countFallback * 0.8) : unitFallback;
+    const check = classifyGeminiKey(effectiveKey);
+    if (!check.isRecognized && check.keyType === 'other_service') {
+      return res.status(400).json({
+        success: false,
+        isInvalidFormat: true,
+        error: check.warning,
+      });
+    }
+
+    const clientToUse = customApiKey || !defaultAiClient ? createAiClient(effectiveKey) : defaultAiClient;
+
+    const franchisesPrompt = existingFranchises.length > 0
+      ? `Categorias já existentes no acervo: [${existingFranchises.join(', ')}]. Se a revista pertencer a um desses personagens/franquias, reutilize exatamente esse nome. Caso seja novo, crie uma categoria clara (ex: "Wolverine", "Justiceiro", "Turma da Mônica", "Tex").`
+      : 'Defina uma categoria clara para o personagem ou franquia principal visível na capa (ex: "Homem-Aranha", "Batman", "Superman", "X-Men", "Wolverine", "Tex", "Turma da Mônica").';
+
+    const systemInstruction = `Você é um perito catalogador e avaliador de histórias em quadrinhos no Brasil (Editora Abril, Panini, EBAL, Mythos, Rio Gráfica/Globo, Record, Nova Sampa, etc.).
+Sua tarefa é ler e identificar COM PRECISÃO ABSOLUTA o que está na(s) foto(s) enviada(s) (${allImages.length} imagem/imagens).
+
+REGRAS OBRIGATÓRIAS DE FIDELIDADE À IMAGEM:
+1. LEIA OS TEXTOS VISÍVEIS NA CAPA: título exato da revista, subtítulo da história, número da edição (#), logotipo da editora (Abril, Panini, Marvel, DC, EBAL, etc.), selo de preço de capa ou data, e nomes de roteiristas/desenhistas se visíveis.
+2. NÃO INVENTE nem use dados genéricos. Se na imagem houver uma HQ do Batman #12 da Editora Abril de 1988, o título, série, número, ano e descrição DEVEM ser exatamente sobre o Batman #12 da Editora Abril de 1988.
+3. ${franchisesPrompt}
+4. PREÇO E LOTES:
+   - Pesquise mentalmente o valor médio real de mercado brasileiro (sebo/colecionismo) para a edição específica identificada pelo seu estado aparente na foto.
+   - Se houver múltiplas capas ou foto de lote/coleção, avalie o preço unitário individual justo e calcule o preço do lote fechado com 15% a 25% de desconto.
+   - Se for uma revista única, unitPrice e bundlePrice devem ter o mesmo valor do suggestedPrice.
+5. SINOPSE / DESCRIÇÃO: Escreva 2 a 3 frases objetivas descrevendo especificamente a edição/arco mostrado na capa, os personagens envolvidos e detalhes visuais da conservação observada na foto. Nunca escreva textos genéricos ou frases repetitivas sobre limpeza.`;
+
+    const imageParts = allImages.slice(0, 6).map((b64) => {
+      const detectedMime = b64.match(/^data:(image\/[\w+.-]+);base64,/i)?.[1] || mimeType;
+      const cleanData = b64.replace(/^data:image\/[^;]+;base64,/i, '');
+      return {
+        inlineData: {
+          mimeType: detectedMime,
+          data: cleanData,
+        },
+      };
+    });
+
+    const responseSchema = {
+      type: Type.OBJECT,
+      properties: {
+        title: { type: Type.STRING, description: 'Título fiel e exato identificado na capa + número da edição (ou resumo do lote se múltiplas capas)' },
+        publisher: { type: Type.STRING, description: 'Editora exata visível ou correspondente à edição: Editora Abril, Panini, Marvel, DC Comics, Image Comics, Dark Horse ou Outra' },
+        series: { type: Type.STRING, description: 'Nome exato da série/coleção impresso na capa' },
+        franchiseCategory: { type: Type.STRING, description: 'Personagem ou franquia principal visível na capa' },
+        issueNumber: { type: Type.STRING, description: 'Número exato da edição lido na capa (ex: #42 ou #01 ao #05)' },
+        yearEstimate: { type: Type.INTEGER, description: 'Ano real de publicação da edição identificada na capa' },
+        suggestedPrice: { type: Type.NUMBER, description: 'Preço justo de mercado brasileiro em BRL' },
+        unitPrice: { type: Type.NUMBER, description: 'Preço unitário por exemplar em BRL' },
+        bundlePrice: { type: Type.NUMBER, description: 'Preço do lote fechado com desconto em BRL (igual ao unitário se 1 revista)' },
+        isCollection: { type: Type.BOOLEAN, description: 'true se houver múltiplas edições/fotos de coleção, false se exemplar único' },
+        collectionCount: { type: Type.INTEGER, description: 'Quantidade de exemplares identificados' },
+        allowsUnitPurchase: { type: Type.BOOLEAN, description: 'true se for lote e permitir venda avulsa' },
+        description: { type: Type.STRING, description: 'Descrição específica desta edição/arco e estado visual observado na capa' },
+        conditionGradeSuggestion: { type: Type.STRING, description: 'otimo, bom, ruim ou leitura conforme desgaste visível na capa' },
+        keyCharacters: { type: Type.ARRAY, items: { type: Type.STRING }, description: 'Personagens presentes na capa' },
+      },
+      required: [
+        'title',
+        'publisher',
+        'series',
+        'franchiseCategory',
+        'issueNumber',
+        'yearEstimate',
+        'suggestedPrice',
+        'description',
+        'conditionGradeSuggestion',
+      ],
+    };
+
+    let result: { text: string; modelUsed: string };
+    try {
+      result = await generateCoverAnalysisWithGemini(
+        clientToUse,
+        imageParts,
+        systemInstruction,
+        `Identifique exatamente qual HQ (ou conjunto de HQs) está nesta(s) ${allImages.length} imagem(ns). Transcreva o título, número, série, editora, ano real de publicação, avalie o estado visual e sugira preço realista do mercado brasileiro.`,
+        responseSchema
+      );
+    } catch (genErr: any) {
+      console.error('Gemini vision API error:', genErr);
+      return res.status(400).json({
+        success: false,
+        error: `Erro na leitura pela IA Gemini: ${genErr?.message || 'Verifique se a chave está correta e ativa no Google AI Studio.'}`,
+        details: genErr?.message,
+      });
+    }
+
+    const parsed = JSON.parse(result.text);
+    const isNewCollection = !existingFranchises.some(
+      (f: string) => f.toLowerCase() === (parsed.franchiseCategory || '').toLowerCase()
+    );
+
+    const isCol = Boolean(parsed.isCollection ?? (allImages.length > 1));
+    const count = Number(parsed.collectionCount) || (allImages.length > 1 ? allImages.length : 1);
+    const unit = Number(parsed.unitPrice || parsed.suggestedPrice || 25.0);
+    const bundle = Number(parsed.bundlePrice || (isCol ? Math.round(unit * count * 0.8) : unit));
 
     return res.json({
       success: true,
-      source: 'heuristic-analyzer',
+      source: result.modelUsed,
       data: {
-        title: isMulti
-          ? `Lote Coleção: ${fallbackFranchise} (${countFallback} Edições Completas)`
-          : `Revista Clássica: ${fallbackFranchise} - Edição Especial`,
-        publisher: 'Editora Abril',
-        series: `${fallbackFranchise} Clássico`,
-        franchiseCategory: fallbackFranchise,
-        issueNumber: isMulti ? `Lote #01 ao #${countFallback}` : '#01',
-        yearEstimate: 1992,
-        suggestedPrice: bundleFallback,
-        unitPrice: unitFallback,
-        bundlePrice: bundleFallback,
-        isCollection: isMulti,
-        collectionCount: countFallback,
-        allowsUnitPurchase: isMulti,
-        description: 'Exemplar histórico preservado com miolo original 100% completo e cores autênticas.',
-        conditionGradeSuggestion: 'bom',
-        isNewCollectionCategory: false,
-        keyCharacters: [fallbackFranchise],
+        ...parsed,
+        isCollection: isCol,
+        collectionCount: count,
+        unitPrice: unit,
+        bundlePrice: bundle,
+        suggestedPrice: isCol ? bundle : unit,
+        allowsUnitPurchase: parsed.allowsUnitPurchase ?? isCol,
+        isNewCollectionCategory: isNewCollection,
       },
     });
   } catch (error: any) {
-    console.error('Error analyzing cover:', error);
-    return res.status(500).json({ error: error.message || 'Erro ao analisar a capa da HQ.' });
+    console.error('Error in analyze-cover route:', error);
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Erro interno ao processar a imagem da HQ.',
+    });
   }
 });
 
-// 2. Dynamic Mercado Pago Preference / Checkout Link Generator
+// 2. Dynamic Mercado Pago / PIX Checkout Preference
 app.post('/api/mercadopago/create-preference', async (req, res) => {
   try {
-    const { items, buyer, shippingCost = 0, discount = 0 } = req.body;
+    const { items, buyer, shippingCost = 0, discount = 0, storePixKey = 'neto.mmp@gmail.com' } = req.body;
 
     if (!items || !items.length) {
       return res.status(400).json({ error: 'Nenhum item informado para pagamento.' });
+    }
+
+    if (!buyer || !buyer.name || !buyer.email || !buyer.cep || !buyer.street || !buyer.number || !buyer.city || !buyer.state) {
+      return res.status(400).json({
+        error: 'Endereço incompleto. Todos os campos de entrega são obrigatórios para emissão do pedido.',
+      });
     }
 
     const subtotal = items.reduce(
@@ -211,12 +352,12 @@ app.post('/api/mercadopago/create-preference', async (req, res) => {
     );
 
     const total = Math.max(1, subtotal - discount + shippingCost);
+    const orderId = `HQM-${Date.now().toString().slice(-6)}`;
 
-    const mpAccessToken = process.env.MERCADO_PAGO_ACCESS_TOKEN;
-    const orderId = `HQ-${Date.now()}`;
+    const customMpToken = ((req.headers['x-mp-access-token'] as string) || '').trim();
+    const mpAccessToken = customMpToken || (process.env.MERCADO_PAGO_ACCESS_TOKEN || '').trim();
 
-    // If user provided a real Mercado Pago Access Token
-    if (mpAccessToken) {
+    if (mpAccessToken && (mpAccessToken.startsWith('APP_USR-') || mpAccessToken.startsWith('TEST-'))) {
       try {
         const preferencePayload = {
           items: items.map((i: any) => ({
@@ -231,15 +372,21 @@ app.post('/api/mercadopago/create-preference', async (req, res) => {
             mode: 'not_specified',
           },
           payer: {
-            name: buyer?.name || 'Comprador HQ',
-            email: buyer?.email || 'comprador@bancahq.com',
+            name: buyer.name,
+            email: buyer.email,
+            phone: {
+              number: buyer.phone || '',
+            },
+            identification: {
+              type: 'CPF',
+              number: (buyer.cpf || '').replace(/\D/g, ''),
+            },
+            address: {
+              street_name: buyer.street,
+              street_number: Number(buyer.number) || 1,
+              zip_code: buyer.cep.replace(/\D/g, ''),
+            },
           },
-          back_urls: {
-            success: `${process.env.APP_URL || 'http://localhost:3000'}/?status=success&orderId=${orderId}`,
-            failure: `${process.env.APP_URL || 'http://localhost:3000'}/?status=failure`,
-            pending: `${process.env.APP_URL || 'http://localhost:3000'}/?status=pending`,
-          },
-          auto_return: 'approved',
           external_reference: orderId,
         };
 
@@ -261,32 +408,34 @@ app.post('/api/mercadopago/create-preference', async (req, res) => {
             initPoint: mpData.init_point || mpData.sandbox_init_point,
             orderId,
             total,
+            pixKey: storePixKey,
           });
         }
       } catch (err: any) {
-        console.warn('Mercado Pago API call failed, generating simulated checkout:', err?.message);
+        console.warn('Mercado Pago API preference call error:', err?.message);
       }
     }
 
-    // Dynamic simulated checkout link with full QR Code Pix and Checkout Flow
-    const mockInitPoint = `https://www.mercadopago.com.br/checkout/v1/redirect?pref_id=HQ-SIM-${orderId}`;
+    const pixPayload = `00020126580014BR.GOV.BCB.PIX0136${storePixKey}520400005303986540${total.toFixed(2)}5802BR5915HQ MASTER COMICS6009SAO PAULO62070503***6304`;
+
     return res.json({
       success: true,
-      mode: 'sandbox_simulation',
-      preferenceId: `PREF-${orderId}`,
-      initPoint: mockInitPoint,
+      mode: 'in_store_pix',
+      preferenceId: `PIX-${orderId}`,
+      initPoint: null,
       orderId,
       total,
-      pixQrCode: `00020126580014BR.GOV.BCB.PIX0136bancahq-pix-chave-chave-2026520400005303986540${total.toFixed(2)}5802BR5915BANCA HQ SAAS6009SAO PAULO62070503***6304`,
-      message: 'Preferência gerada na hora dinamicamente para o carrinho.',
+      pixKey: storePixKey,
+      pixQrCode: pixPayload,
+      message: 'Pedido registrado com sucesso. Efetue o pagamento via PIX para envio imediato.',
     });
   } catch (error: any) {
-    console.error('Error creating Mercado Pago preference:', error);
+    console.error('Error creating checkout preference:', error);
     return res.status(500).json({ error: error.message || 'Erro ao gerar checkout.' });
   }
 });
 
-// 3. Freight calculation (Correios PAC & SEDEX simulation based on CEP)
+// 3. Freight calculation
 app.post('/api/frete/calcular', (req, res) => {
   try {
     const { buyerCep, sellerCep = '01310-100', itemCount = 1 } = req.body;
@@ -325,13 +474,6 @@ app.post('/api/frete/calcular', (req, res) => {
           days: isSameState ? '1 a 2 dias úteis' : '2 a 4 dias úteis',
           insuranceIncluded: true,
         },
-        {
-          code: 'RETIRADA',
-          name: 'Retirar com o Vendedor (Sem custo)',
-          price: 0.0,
-          days: 'A combinar após confirmação',
-          insuranceIncluded: false,
-        },
       ],
     });
   } catch (error: any) {
@@ -357,7 +499,7 @@ async function startServer() {
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`BancaHQ SaaS running at http://localhost:${PORT}`);
+    console.log(`HQ Master server running at http://localhost:${PORT}`);
   });
 }
 

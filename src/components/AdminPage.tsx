@@ -26,10 +26,15 @@ import {
   Info,
   DollarSign,
   Share2,
+  User,
+  MapPin,
+  Search,
+  ExternalLink,
 } from 'lucide-react';
 import { HQItem, Seller, ConditionGrade, DiscountProposal, Order } from '../types.ts';
 import { formatBRL, getConditionInfo, normalizeFranchiseName } from '../utils/comicLogic.ts';
 import { SUPABASE_SQL_SCHEMA, getSupabaseCredentials, saveSupabaseCredentials } from '../utils/supabaseClient.ts';
+import { compressFileToBase64, compressImageBase64 } from '../utils/imageCompressor.ts';
 import { HQMasterLogo } from './HQMasterLogo.tsx';
 
 interface AdminPageProps {
@@ -44,6 +49,7 @@ interface AdminPageProps {
   onAddSeller: (seller: Omit<Seller, 'id' | 'totalSales' | 'totalEarnings' | 'active' | 'joinedAt'>) => void;
   onDeleteSeller?: (id: string) => void;
   onUpdateSellerPassword?: (sellerId: string, newPass: string) => void;
+  onUpdateOwnerProfile?: (updatedSeller: Seller) => void;
   currentSeller: Seller | null;
   onLoginSeller: (email: string, pass: string) => boolean;
   onLogoutSeller: () => void;
@@ -65,6 +71,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({
   onAddSeller,
   onDeleteSeller,
   onUpdateSellerPassword,
+  onUpdateOwnerProfile,
   currentSeller,
   onLoginSeller,
   onLogoutSeller,
@@ -74,13 +81,13 @@ export const AdminPage: React.FC<AdminPageProps> = ({
   onUpdateOrderTracking,
   onReleasePayout,
 }) => {
-  // Login form state (Clean & Secure - No visible passwords or bypass buttons)
+  // Login form state
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [loginError, setLoginError] = useState('');
 
   // Active Tab
-  const [activeTab, setActiveTab] = useState<'new-hq' | 'catalog' | 'collaborators' | 'sales' | 'proposals' | 'settings'>('new-hq');
+  const [activeTab, setActiveTab] = useState<'new-hq' | 'catalog' | 'owner-profile' | 'collaborators' | 'sales' | 'proposals' | 'settings'>('new-hq');
 
   // Camera capture modal state
   const [cameraActive, setCameraActive] = useState(false);
@@ -89,6 +96,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({
   // New HQ Form State
   const [analyzingWithAI, setAnalyzingWithAI] = useState(false);
   const [aiAnalysisFeedback, setAiAnalysisFeedback] = useState<string | null>(null);
+  const [aiAnalysisError, setAiAnalysisError] = useState<string | null>(null);
   const [formImages, setFormImages] = useState<string[]>([]);
   const [formTitle, setFormTitle] = useState('');
   const [formDescription, setFormDescription] = useState('');
@@ -108,11 +116,27 @@ export const AdminPage: React.FC<AdminPageProps> = ({
   const [formIs1Real, setFormIs1Real] = useState(false);
   const [formSellerId, setFormSellerId] = useState(currentSeller?.id || 'master');
 
-  // Bulk & Replace Real Photos State
-  const bulkFileInputRef = useRef<HTMLInputElement | null>(null);
-  const replaceItemPhotoRef = useRef<HTMLInputElement | null>(null);
-  const [targetReplaceHqId, setTargetReplaceHqId] = useState<string | null>(null);
-  const [bulkUploadMsg, setBulkUploadMsg] = useState<string | null>(null);
+  // Master Owner Profile State
+  const masterSeller = sellers.find((s) => s.role === 'master') || currentSeller;
+  const [ownerName, setOwnerName] = useState(masterSeller?.name || 'Neto');
+  const [ownerStoreName, setOwnerStoreName] = useState(masterSeller?.storeName || 'HQ Master');
+  const [ownerEmail, setOwnerEmail] = useState(masterSeller?.email || 'neto.mmp@gmail.com');
+  const [ownerPhone, setOwnerPhone] = useState(masterSeller?.phone || '');
+  const [ownerCpfCnpj, setOwnerCpfCnpj] = useState(masterSeller?.cpfCnpj || '');
+  const [ownerCep, setOwnerCep] = useState(masterSeller?.cep || '01310-100');
+  const [ownerStreet, setOwnerStreet] = useState(masterSeller?.street || 'Avenida Paulista');
+  const [ownerNumber, setOwnerNumber] = useState(masterSeller?.number || '');
+  const [ownerComplement, setOwnerComplement] = useState(masterSeller?.complement || '');
+  const [ownerNeighborhood, setOwnerNeighborhood] = useState(masterSeller?.neighborhood || 'Bela Vista');
+  const [ownerCity, setOwnerCity] = useState(masterSeller?.city || 'São Paulo');
+  const [ownerState, setOwnerState] = useState(masterSeller?.state || 'SP');
+  const [ownerPixKeyType, setOwnerPixKeyType] = useState<'cpf' | 'email' | 'phone' | 'random'>(masterSeller?.pixKeyType || 'email');
+  const [ownerPixKey, setOwnerPixKey] = useState(masterSeller?.pixKey || 'neto.mmp@gmail.com');
+  const [ownerBankName, setOwnerBankName] = useState(masterSeller?.bankName || '');
+  const [ownerAccountHolder, setOwnerAccountHolder] = useState(masterSeller?.accountHolder || 'Neto MMP');
+  const [ownerNewPassword, setOwnerNewPassword] = useState('');
+  const [ownerSavedMsg, setOwnerSavedMsg] = useState(false);
+  const [lookingUpOwnerCep, setLookingUpOwnerCep] = useState(false);
 
   // Secure Settings in Admin (Only Master Access)
   const currentCreds = getSupabaseCredentials();
@@ -125,12 +149,8 @@ export const AdminPage: React.FC<AdminPageProps> = ({
   const [geminiKeyInput, setGeminiKeyInput] = useState(() => localStorage.getItem('hq_master_gemini_key') || '');
   const [mpTokenInput, setMpTokenInput] = useState(() => localStorage.getItem('hq_master_mp_token') || '');
   const [keysSavedMsg, setKeysSavedMsg] = useState(false);
-  const [testAiResult, setTestAiResult] = useState<string | null>(null);
-
-  // Password change state
-  const [isChangingPassword, setIsChangingPassword] = useState(false);
-  const [newMasterPassword, setNewMasterPassword] = useState('');
-  const [passwordChangeFeedback, setPasswordChangeFeedback] = useState<string | null>(null);
+  const [testingAiKey, setTestingAiKey] = useState(false);
+  const [testAiResult, setTestAiResult] = useState<{ valid: boolean; message: string } | null>(null);
 
   // Collaborator Registration inside Admin
   const [cName, setCName] = useState('');
@@ -175,7 +195,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({
   };
 
   // Capture Photo from Camera
-  const capturePhoto = () => {
+  const capturePhoto = async () => {
     if (!videoRef.current) return;
     const canvas = document.createElement('canvas');
     canvas.width = videoRef.current.videoWidth || 800;
@@ -183,31 +203,31 @@ export const AdminPage: React.FC<AdminPageProps> = ({
     const ctx = canvas.getContext('2d');
     if (ctx) {
       ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
-      const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
-      setFormImages((prev) => [...prev, dataUrl]);
+      const rawDataUrl = canvas.toDataURL('image/jpeg', 0.85);
+      const compressed = await compressImageBase64(rawDataUrl, 1200, 0.82);
+      setFormImages((prev) => [...prev, compressed]);
     }
     const stream = videoRef.current.srcObject as MediaStream;
     stream?.getTracks().forEach((track) => track.stop());
     setCameraActive(false);
   };
 
-  // Handle Local File Upload
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Handle Local File Upload with Auto-compression
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
 
-    Array.from(files).forEach((file) => {
-      const reader = new FileReader();
-      reader.onload = () => {
-        if (typeof reader.result === 'string') {
-          setFormImages((prev) => [...prev, reader.result as string]);
-        }
-      };
-      reader.readAsDataURL(file);
-    });
+    for (const file of Array.from(files)) {
+      try {
+        const compressed = await compressFileToBase64(file, 1200, 0.82);
+        setFormImages((prev) => [...prev, compressed]);
+      } catch (err) {
+        console.error('Erro ao comprimir imagem:', err);
+      }
+    }
   };
 
-  // AI Vision Cover Analysis with Multiple Covers & Collection Support
+  // AI Vision Cover Analysis
   const handleAnalyzeWithAI = async () => {
     if (formImages.length === 0) {
       alert('Tire ou selecione ao menos uma foto de capa antes de solicitar a leitura da IA.');
@@ -216,10 +236,11 @@ export const AdminPage: React.FC<AdminPageProps> = ({
 
     setAnalyzingWithAI(true);
     setAiAnalysisFeedback(null);
+    setAiAnalysisError(null);
 
     try {
       const existingFranchises = Array.from(new Set(hqs.map((h) => h.franchiseCategory)));
-      const customKey = localStorage.getItem('hq_master_gemini_key') || '';
+      const customKey = (localStorage.getItem('hq_master_gemini_key') || '').trim();
 
       const res = await fetch('/api/gemini/analyze-cover', {
         method: 'POST',
@@ -235,7 +256,15 @@ export const AdminPage: React.FC<AdminPageProps> = ({
       });
 
       const json = await res.json();
-      if (json.success && json.data) {
+
+      if (!res.ok || !json.success) {
+        setAiAnalysisError(
+          json.error || 'A IA não conseguiu ler a capa. Verifique a chave de API na aba "Configurações & Chaves".'
+        );
+        return;
+      }
+
+      if (json.data) {
         const d = json.data;
         setFormTitle(d.title || formTitle);
         setFormDescription(d.description || formDescription);
@@ -262,167 +291,127 @@ export const AdminPage: React.FC<AdminPageProps> = ({
         setAiAnalysisFeedback(
           d.isCollection
             ? `Coleção identificada (${d.collectionCount} edições)! Sugerido lote a ${formatBRL(d.bundlePrice)} ou avulso a ${formatBRL(d.unitPrice)} cada.`
-            : `Capa reconhecida com sucesso. Categoria: "${matchedFranchise}" ${isNew ? '(Nova Categoria Criada)' : ''}.`
+            : `Capa reconhecida com sucesso! Personagem: "${matchedFranchise}" ${isNew ? '(Nova Categoria Criada)' : ''}.`
         );
       }
     } catch (err: any) {
       console.error('Erro na análise da IA:', err);
-      setAiAnalysisFeedback('Leitura concluída com o analisador de dados. Ajuste os campos se desejar.');
+      setAiAnalysisError('Erro de conexão com o servidor de IA. Verifique sua conexão e a chave do Gemini.');
     } finally {
       setAnalyzingWithAI(false);
     }
   };
 
-  // Bulk Upload Real Photos
-  const handleBulkPhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
-
-    const currentMaster = sellers.find((s) => s.role === 'master') || sellers[0];
-    const fileList = Array.from(files);
-    let loadedCount = 0;
-
-    fileList.forEach((file, index) => {
-      const reader = new FileReader();
-      reader.onload = () => {
-        if (typeof reader.result === 'string') {
-          const imgUrl = reader.result as string;
-          const cleanName = file.name.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' ');
-
-          onAddHQ({
-            title: `HQ Real - ${cleanName || `Exemplar #${hqs.length + index + 1}`}`,
-            description: 'Exemplar com foto real do acervo. Miolo original 100% completo com todas as páginas preservadas.',
-            publisher: 'Editora Abril',
-            series: 'Acervo Principal',
-            franchiseCategory: 'Geral',
-            issueNumber: `${index + 1}`,
-            year: 1995,
-            condition: 'bom',
-            conditionDetails: 'Miolo íntegro, todas as páginas garantidas.',
-            hasAllPages: true,
-            cleaningNote: '',
-            price: 25.0,
-            unitPrice: 25.0,
-            bundlePrice: 25.0,
-            isCollection: false,
-            images: [imgUrl],
-            sellerId: currentMaster.id,
-            sellerName: currentMaster.storeName,
-            sellerAddress: currentMaster.address,
-            sellerCep: currentMaster.cep,
-            featured: index === 0,
-            sold: false,
-          });
-
-          loadedCount++;
-          if (loadedCount === fileList.length) {
-            setBulkUploadMsg(`${loadedCount} foto(s) real(is) adicionada(s) com sucesso ao catálogo!`);
-            setTimeout(() => setBulkUploadMsg(null), 5000);
-          }
-        }
-      };
-      reader.readAsDataURL(file);
-    });
-
-    if (e.target) e.target.value = '';
-  };
-
-  // Handle replacing photo of an existing HQ item
-  const handleReplaceItemPhoto = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files || files.length === 0 || !targetReplaceHqId) return;
-
-    const file = files[0];
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === 'string') {
-        const newImg = reader.result as string;
-        const targetHQ = hqs.find((h) => h.id === targetReplaceHqId);
-        if (targetHQ) {
-          onUpdateHQ({
-            ...targetHQ,
-            images: [newImg, ...targetHQ.images.slice(1)],
-          });
-          alert(`Foto de "${targetHQ.title}" atualizada com sucesso com a sua foto real!`);
-        }
-        setTargetReplaceHqId(null);
+  // ViaCEP Lookup for Owner
+  const handleLookupOwnerCep = async () => {
+    const raw = ownerCep.replace(/\D/g, '');
+    if (raw.length !== 8) {
+      alert('O CEP deve conter 8 dígitos.');
+      return;
+    }
+    setLookingUpOwnerCep(true);
+    try {
+      const res = await fetch(`https://viacep.com.br/ws/${raw}/json/`);
+      const data = await res.json();
+      if (!data.erro) {
+        setOwnerStreet(data.logradouro || '');
+        setOwnerNeighborhood(data.bairro || '');
+        setOwnerCity(data.localidade || '');
+        setOwnerState(data.uf || '');
+        setOwnerCep(`${raw.slice(0, 5)}-${raw.slice(5)}`);
+      } else {
+        alert('CEP não encontrado.');
       }
-    };
-    reader.readAsDataURL(file);
-    if (e.target) e.target.value = '';
+    } catch {
+      alert('Falha ao consultar CEP online.');
+    } finally {
+      setLookingUpOwnerCep(false);
+    }
   };
 
-  // Apply R$ 1,00 Special
-  const apply1RealReadingSpecial = () => {
-    setFormPrice(1.0);
-    setFormUnitPrice(1.0);
-    setFormCondition('leitura');
-    setFormIs1Real(true);
-    setFormConditionDetails('Exemplar de leitura com sinais de manuseio e desgaste, com 100% das páginas preservadas.');
-  };
-
-  // Save HQ
-  const handleSaveHQ = (e: React.FormEvent) => {
+  // Save Owner Profile Data
+  const handleSaveOwnerProfile = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formTitle || !formFranchise || formPrice <= 0) {
-      alert('Informe o título, a categoria e um preço válido.');
+    if (!currentSeller) return;
+
+    const fullAddress = `${ownerStreet}, nº ${ownerNumber || 'S/N'}${ownerComplement ? ` (${ownerComplement})` : ''} - ${ownerNeighborhood}, ${ownerCity}/${ownerState}`;
+
+    const updatedSeller: Seller = {
+      ...currentSeller,
+      name: ownerName,
+      storeName: ownerStoreName,
+      email: ownerEmail,
+      phone: ownerPhone,
+      cpfCnpj: ownerCpfCnpj,
+      cep: ownerCep,
+      address: fullAddress,
+      street: ownerStreet,
+      number: ownerNumber,
+      complement: ownerComplement,
+      neighborhood: ownerNeighborhood,
+      city: ownerCity,
+      state: ownerState,
+      pixKeyType: ownerPixKeyType,
+      pixKey: ownerPixKey,
+      bankName: ownerBankName,
+      accountHolder: ownerAccountHolder,
+      password: ownerNewPassword.trim() ? ownerNewPassword.trim() : currentSeller.password,
+      totalSales: 0,
+      totalEarnings: 0,
+    };
+
+    if (onUpdateOwnerProfile) {
+      onUpdateOwnerProfile(updatedSeller);
+    }
+
+    setOwnerSavedMsg(true);
+    setTimeout(() => setOwnerSavedMsg(false), 3000);
+  };
+
+  // Test Gemini Key Live
+  const handleTestGeminiKey = async () => {
+    const key = geminiKeyInput.trim();
+    if (!key) {
+      alert('Digite a chave para testar.');
       return;
     }
 
-    const assignedSeller = sellers.find((s) => s.id === formSellerId) || sellers[0];
+    setTestingAiKey(true);
+    setTestAiResult(null);
 
-    onAddHQ({
-      title: formTitle,
-      description: formDescription || 'Exemplar com miolo completo e conservação original preservada.',
-      publisher: formPublisher,
-      series: formSeries || formTitle,
-      franchiseCategory: formFranchise,
-      issueNumber: formIssueNumber || '01',
-      year: formYear,
-      condition: formCondition,
-      conditionDetails: formConditionDetails,
-      hasAllPages: true,
-      cleaningNote: '',
-      price: formPrice,
-      unitPrice: formUnitPrice || formPrice,
-      bundlePrice: formBundlePrice || formPrice,
-      allowsUnitPurchase: formAllowsUnitPurchase,
-      isRareSpecial1Real: formIs1Real,
-      isCollection: formIsCollection,
-      collectionCount: formIsCollection ? formCollectionCount : 1,
-      images: formImages.length > 0 ? formImages : ['https://images.unsplash.com/photo-1601645191163-3fc0d5d34e35?auto=format&fit=crop&w=800&q=80'],
-      sellerId: assignedSeller.id,
-      sellerName: assignedSeller.storeName,
-      sellerAddress: assignedSeller.address,
-      sellerCep: assignedSeller.cep,
-      featured: true,
-      sold: false,
-    });
-
-    alert('Revista publicada com sucesso no catálogo!');
-    setFormImages([]);
-    setFormTitle('');
-    setFormDescription('');
-    setFormSeries('');
-    setFormFranchise('');
-    setFormIssueNumber('');
-    setFormPrice(35.0);
-    setFormIsCollection(false);
-    setFormIs1Real(false);
-    setAiAnalysisFeedback(null);
-    setActiveTab('catalog');
+    try {
+      const res = await fetch('/api/gemini/validate-key', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apiKey: key }),
+      });
+      const data = await res.json();
+      if (res.ok && data.valid) {
+        setTestAiResult({ valid: true, message: data.message });
+      } else {
+        setTestAiResult({ valid: false, message: data.error || 'Chave inválida.' });
+      }
+    } catch (err: any) {
+      setTestAiResult({ valid: false, message: 'Erro de conexão ao testar a chave.' });
+    } finally {
+      setTestingAiKey(false);
+    }
   };
 
-  // Save Keys in Admin
+  // Save Keys
   const handleSaveKeys = (e: React.FormEvent) => {
     e.preventDefault();
-    localStorage.setItem('hq_master_gemini_key', geminiKeyInput.trim());
-    localStorage.setItem('hq_master_mp_token', mpTokenInput.trim());
+    const cleanGemini = geminiKeyInput.trim();
+    const cleanMp = mpTokenInput.trim();
+
+    localStorage.setItem('hq_master_gemini_key', cleanGemini);
+    localStorage.setItem('hq_master_mp_token', cleanMp);
+
     setKeysSavedMsg(true);
     setTimeout(() => setKeysSavedMsg(false), 3000);
   };
 
-  // Save Supabase
+  // Save Supabase Config
   const handleSaveSupabaseConfig = (e: React.FormEvent) => {
     e.preventDefault();
     saveSupabaseCredentials(sbUrl, sbKey);
@@ -430,105 +419,141 @@ export const AdminPage: React.FC<AdminPageProps> = ({
     setTimeout(() => setSbSavedMsg(false), 3000);
   };
 
-  // Create Partner Collaborator
+  const handleCopySql = () => {
+    navigator.clipboard.writeText(SUPABASE_SQL_SCHEMA);
+    setCopiedSql(true);
+    setTimeout(() => setCopiedSql(false), 2000);
+  };
+
+  // Create Partner
   const handleCreatePartner = (e: React.FormEvent) => {
     e.preventDefault();
     if (!cName || !cEmail || !cPassword) {
-      alert('Preencha o nome, e-mail e crie uma senha para o parceiro.');
+      alert('Preencha nome, e-mail e senha do parceiro.');
       return;
     }
+
     onAddSeller({
       name: cName,
-      storeName: cStoreName || `Box de ${cName}`,
-      email: cEmail.trim().toLowerCase(),
-      password: cPassword.trim(),
+      storeName: cStoreName || `${cName} Quadrinhos`,
+      email: cEmail,
+      role: 'partner',
+      password: cPassword,
       cep: cCep || '01310-100',
       address: cAddress || 'São Paulo - SP',
-      role: 'partner',
     });
-    alert(`Parceiro ${cName} cadastrado com sucesso! Você pode repassar o e-mail e senha a ele.`);
+
     setCName('');
     setCStoreName('');
     setCEmail('');
     setCPassword('');
+    setCCep('01310-100');
     setCAddress('');
+    alert('Colaborador cadastrado com sucesso! Você já pode copiar os dados e enviar a ele.');
   };
 
-  // Copy partner access text
-  const copyPartnerAccess = (seller: Seller) => {
-    const text = `Olá ${seller.name}!\nSeguem seus dados de acesso ao painel da HQ Master:\nLoja: ${seller.storeName}\nE-mail: ${seller.email}\nSenha: ${seller.password}\nAcesso pelo link: ${window.location.origin}/#admin`;
+  const copyPartnerAccess = (partner: Seller) => {
+    const text = `*Bem-vindo ao HQ Master!*\n\nOlá ${partner.name}, seu acesso como parceiro ao nosso acervo está pronto:\n\n*Acesse:* ${window.location.origin}\n*E-mail:* ${partner.email}\n*Senha:* ${partner.password}\n\nFaça login no botão "Área do Colecionador / Admin" para cadastrar e gerenciar seus gibis. Boas vendas!`;
     navigator.clipboard.writeText(text);
-    setCopiedPartnerId(seller.id);
-    setTimeout(() => setCopiedPartnerId(null), 3000);
+    setCopiedPartnerId(partner.id);
+    setTimeout(() => setCopiedPartnerId(null), 2500);
   };
 
-  // Copy SQL
-  const handleCopySql = () => {
-    navigator.clipboard.writeText(SUPABASE_SQL_SCHEMA);
-    setCopiedSql(true);
-    setTimeout(() => setCopiedSql(false), 3000);
-  };
-
-  // Update Master Password
-  const handleSaveNewPassword = (e: React.FormEvent) => {
+  // Publish HQ
+  const handleSubmitNewHQ = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newMasterPassword || newMasterPassword.length < 4) {
-      alert('A senha deve conter no mínimo 4 caracteres.');
+
+    if (formImages.length === 0) {
+      alert('Tire ou envie ao menos 1 foto real da capa.');
       return;
     }
-    if (currentSeller && onUpdateSellerPassword) {
-      onUpdateSellerPassword(currentSeller.id, newMasterPassword);
-      setPasswordChangeFeedback('Sua senha foi alterada com sucesso!');
-      setNewMasterPassword('');
-      setTimeout(() => {
-        setIsChangingPassword(false);
-        setPasswordChangeFeedback(null);
-      }, 2000);
+
+    if (!formTitle || !formSeries) {
+      alert('Preencha o título e a série da revista.');
+      return;
     }
+
+    const currentPublisher = sellers.find((s) => s.id === formSellerId) || currentSeller;
+
+    onAddHQ({
+      title: formTitle,
+      description: formDescription || 'Exemplar com miolo completo, páginas íntegras e preservadas para leitura.',
+      publisher: formPublisher,
+      series: formSeries,
+      franchiseCategory: formFranchise || 'Quadrinhos',
+      issueNumber: formIssueNumber || '01',
+      year: formYear,
+      condition: formCondition,
+      conditionDetails: formConditionDetails,
+      hasAllPages: true,
+      cleaningNote: 'Higienizada e inspecionada',
+      price: formIsCollection ? formBundlePrice : formPrice,
+      unitPrice: formUnitPrice,
+      bundlePrice: formBundlePrice,
+      allowsUnitPurchase: formAllowsUnitPurchase,
+      isRareSpecial1Real: formIs1Real,
+      isCollection: formIsCollection,
+      collectionCount: formIsCollection ? formCollectionCount : 1,
+      images: formImages,
+      sellerId: formSellerId,
+      sellerName: currentPublisher?.storeName || currentPublisher?.name || 'HQ Master',
+      sellerAddress: currentPublisher?.address || 'São Paulo - SP',
+      sellerCep: currentPublisher?.cep || '01310-100',
+      featured: true,
+      sold: false,
+    });
+
+    // Reset Form
+    setFormImages([]);
+    setFormTitle('');
+    setFormDescription('');
+    setFormSeries('');
+    setFormFranchise('');
+    setFormIssueNumber('');
+    setFormYear(1990);
+    setFormPrice(35.0);
+    setFormUnitPrice(25.0);
+    setFormBundlePrice(35.0);
+    setFormAllowsUnitPurchase(false);
+    setFormIsCollection(false);
+    setFormCollectionCount(1);
+    setFormIs1Real(false);
+    setAiAnalysisFeedback(null);
+    setAiAnalysisError(null);
+
+    alert('Revista publicada com sucesso no catálogo!');
+    setActiveTab('catalog');
   };
 
+  // Only external partner sellers
+  const externalPartners = sellers.filter((s) => s.role !== 'master');
+
   return (
-    <div className="min-h-screen bg-[#090c13] text-zinc-100 flex flex-col font-['Inter']">
-      {/* Top Professional Navigation Bar */}
-      <header className="bg-[#0e111a] border-b border-zinc-800/80 px-4 sm:px-6 py-3 sticky top-0 z-30 shadow-xl">
-        <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
+    <div className="min-h-screen bg-[#0b0d13] text-zinc-100 flex flex-col font-['Inter']">
+      {/* Top Bar */}
+      <header className="bg-[#0f121a] border-b border-zinc-800/90 py-3.5 px-4 sm:px-6 sticky top-0 z-40">
+        <div className="max-w-7xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-3">
             <button
               onClick={onBackToStore}
-              className="flex items-center gap-1.5 bg-zinc-800 hover:bg-zinc-750 text-zinc-200 border border-zinc-700 px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors"
+              className="text-zinc-400 hover:text-white flex items-center gap-1.5 text-xs font-semibold bg-zinc-850 hover:bg-zinc-800 border border-zinc-750 px-3 py-1.5 rounded-xl transition-colors"
             >
-              <ArrowLeft className="w-3.5 h-3.5" />
-              <span>Ver Loja</span>
+              <ArrowLeft className="w-4 h-4" />
+              <span>Voltar à Loja</span>
             </button>
-
-            <div className="h-5 w-px bg-zinc-800 hidden sm:block" />
-
-            <div className="flex items-center gap-2">
-              <HQMasterLogo size="sm" showText={false} />
-              <div>
-                <span className="font-extrabold text-sm sm:text-base tracking-tight text-white font-['Space_Grotesk']">
-                  HQ <span className="text-amber-400">MASTER</span>
-                  <span className="text-zinc-400 font-normal text-xs ml-1.5 hidden sm:inline">| Painel Administrativo</span>
-                </span>
-              </div>
+            <div className="hidden sm:block">
+              <HQMasterLogo size="sm" />
             </div>
           </div>
 
           {currentSeller && (
             <div className="flex items-center gap-3 text-xs">
-              <span className="text-zinc-400 hidden sm:inline">
-                Olá, <strong className="text-zinc-200">{currentSeller.name}</strong> ({currentSeller.role === 'master' ? 'Proprietário' : currentSeller.storeName})
+              <span className="text-zinc-300">
+                Olá, <strong className="text-white">{currentSeller.name}</strong>{' '}
+                <span className="text-amber-400 font-bold">
+                  ({currentSeller.role === 'master' ? '👑 Proprietário / Dono Master' : currentSeller.storeName})
+                </span>
               </span>
-
-              {currentSeller.role === 'master' && (
-                <button
-                  onClick={() => setIsChangingPassword(!isChangingPassword)}
-                  className="text-amber-300 hover:text-amber-200 text-xs bg-amber-500/10 border border-amber-500/30 px-2.5 py-1 rounded-lg"
-                >
-                  <KeyRound className="w-3.5 h-3.5 inline mr-1" />
-                  Mudar Senha
-                </button>
-              )}
 
               <button
                 onClick={onLogoutSeller}
@@ -541,40 +566,9 @@ export const AdminPage: React.FC<AdminPageProps> = ({
         </div>
       </header>
 
-      {/* Modal / Card to change master password */}
-      {isChangingPassword && (
-        <div className="bg-[#121622] border-b border-amber-500/30 p-4">
-          <form onSubmit={handleSaveNewPassword} className="max-w-md mx-auto flex items-center gap-2">
-            <input
-              type="password"
-              value={newMasterPassword}
-              onChange={(e) => setNewMasterPassword(e.target.value)}
-              placeholder="Digite sua nova senha de administrador"
-              className="flex-1 bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-1.5 text-xs text-white"
-            />
-            <button
-              type="submit"
-              className="bg-amber-500 hover:bg-amber-400 text-black font-bold px-4 py-1.5 rounded-xl text-xs"
-            >
-              Salvar
-            </button>
-            <button
-              type="button"
-              onClick={() => setIsChangingPassword(false)}
-              className="text-zinc-400 hover:text-white text-xs px-2"
-            >
-              Cancelar
-            </button>
-          </form>
-          {passwordChangeFeedback && (
-            <p className="text-center text-xs text-emerald-400 mt-1 font-semibold">{passwordChangeFeedback}</p>
-          )}
-        </div>
-      )}
-
       {/* Main Content Area */}
       {!currentSeller ? (
-        // CLEAN & SECURE LOGIN VIEW (No exposed passwords or direct buttons)
+        // CLEAN & SECURE LOGIN VIEW
         <div className="flex-1 flex items-center justify-center p-4 sm:p-6">
           <div className="w-full max-w-sm bg-[#111520] border border-zinc-800 rounded-3xl p-6 sm:p-8 space-y-6 shadow-2xl">
             <div className="text-center space-y-3">
@@ -583,10 +577,10 @@ export const AdminPage: React.FC<AdminPageProps> = ({
               </div>
               <div>
                 <h1 className="text-lg font-black text-white font-['Space_Grotesk']">
-                  Acesso Restrito
+                  HQ Master — Acesso Administrativo
                 </h1>
-                <p className="text-xs text-zinc-400 mt-1 leading-relaxed">
-                  Gerenciamento do catálogo, publicações e estoque da loja.
+                <p className="text-xs text-zinc-400">
+                  Painel de gestão de acervo, precificação e estoque.
                 </p>
               </div>
             </div>
@@ -666,6 +660,21 @@ export const AdminPage: React.FC<AdminPageProps> = ({
               <span>Catálogo & Estoque ({hqs.length})</span>
             </button>
 
+            {/* NEW TAB: DADOS DO DONO / MEU PERFIL (Neto) */}
+            {currentSeller.role === 'master' && (
+              <button
+                onClick={() => setActiveTab('owner-profile')}
+                className={`flex items-center gap-1.5 px-4 py-2.5 rounded-xl transition-all whitespace-nowrap ${
+                  activeTab === 'owner-profile'
+                    ? 'bg-amber-500 text-black font-bold shadow'
+                    : 'text-zinc-400 hover:text-white hover:bg-zinc-850'
+                }`}
+              >
+                <User className="w-3.5 h-3.5" />
+                <span>Meu Perfil / Dados do Dono</span>
+              </button>
+            )}
+
             {/* Exclusive Tab: Collaborators Management (Master Only) */}
             {currentSeller.role === 'master' && (
               <button
@@ -677,7 +686,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                 }`}
               >
                 <Users className="w-3.5 h-3.5" />
-                <span>Colaboradores ({sellers.length})</span>
+                <span>Colaboradores ({externalPartners.length})</span>
               </button>
             )}
 
@@ -690,7 +699,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({
               }`}
             >
               <Truck className="w-3.5 h-3.5" />
-              <span>Vendas & Custódia ({orders.length})</span>
+              <span>Vendas & Pedidos ({orders.length})</span>
             </button>
 
             <button
@@ -721,6 +730,257 @@ export const AdminPage: React.FC<AdminPageProps> = ({
             )}
           </div>
 
+          {/* TAB: MEU PERFIL / DADOS DO DONO (Neto MMP) */}
+          {activeTab === 'owner-profile' && currentSeller.role === 'master' && (
+            <div className="bg-[#111520] border border-zinc-800 rounded-3xl p-5 sm:p-7 space-y-6">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-base font-black text-white font-['Space_Grotesk'] flex items-center gap-2">
+                    <User className="w-5 h-5 text-amber-400" />
+                    Dados do Proprietário & Responsável (HQ Master)
+                  </h3>
+                  <p className="text-xs text-zinc-400">
+                    Seus dados pessoais, endereço de postagem nos Correios e chave PIX para recebimento direto das vendas da loja.
+                  </p>
+                </div>
+                {ownerSavedMsg && (
+                  <span className="text-xs font-bold text-emerald-400 bg-emerald-950/60 border border-emerald-800 px-3 py-1.5 rounded-xl flex items-center gap-1">
+                    <CheckCircle2 className="w-4 h-4" /> Dados salvos com sucesso!
+                  </span>
+                )}
+              </div>
+
+              <form onSubmit={handleSaveOwnerProfile} className="space-y-5">
+                {/* Identification */}
+                <div className="bg-zinc-950/60 p-4 rounded-2xl border border-zinc-800 space-y-3">
+                  <h4 className="text-xs font-bold text-amber-400 uppercase tracking-wider">
+                    1. Identificação do Responsável
+                  </h4>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-[11px] text-zinc-400 mb-1">Nome do Responsável *</label>
+                      <input
+                        type="text"
+                        value={ownerName}
+                        onChange={(e) => setOwnerName(e.target.value)}
+                        placeholder="Neto"
+                        className="w-full bg-zinc-900 border border-zinc-700 rounded-xl px-3 py-2 text-xs text-white"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-zinc-400 mb-1">Nome da Loja Oficial *</label>
+                      <input
+                        type="text"
+                        value={ownerStoreName}
+                        onChange={(e) => setOwnerStoreName(e.target.value)}
+                        placeholder="HQ Master"
+                        className="w-full bg-zinc-900 border border-zinc-700 rounded-xl px-3 py-2 text-xs text-white"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-zinc-400 mb-1">E-mail de Login *</label>
+                      <input
+                        type="email"
+                        value={ownerEmail}
+                        onChange={(e) => setOwnerEmail(e.target.value)}
+                        placeholder="neto.mmp@gmail.com"
+                        className="w-full bg-zinc-900 border border-zinc-700 rounded-xl px-3 py-2 text-xs text-white"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-zinc-400 mb-1">Telefone / WhatsApp</label>
+                      <input
+                        type="text"
+                        value={ownerPhone}
+                        onChange={(e) => setOwnerPhone(e.target.value)}
+                        placeholder="(11) 98765-4321"
+                        className="w-full bg-zinc-900 border border-zinc-700 rounded-xl px-3 py-2 text-xs text-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-zinc-400 mb-1">CPF ou CNPJ (para etiquetas dos Correios)</label>
+                      <input
+                        type="text"
+                        value={ownerCpfCnpj}
+                        onChange={(e) => setOwnerCpfCnpj(e.target.value)}
+                        placeholder="000.000.000-00"
+                        className="w-full bg-zinc-900 border border-zinc-700 rounded-xl px-3 py-2 text-xs text-white font-mono"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-zinc-400 mb-1">Alterar Senha de Administrador</label>
+                      <input
+                        type="password"
+                        value={ownerNewPassword}
+                        onChange={(e) => setOwnerNewPassword(e.target.value)}
+                        placeholder="Deixe em branco para manter a atual"
+                        className="w-full bg-zinc-900 border border-zinc-700 rounded-xl px-3 py-2 text-xs text-white"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Postal Origin Address */}
+                <div className="bg-zinc-950/60 p-4 rounded-2xl border border-zinc-800 space-y-3">
+                  <h4 className="text-xs font-bold text-amber-400 uppercase tracking-wider flex items-center gap-1.5">
+                    <MapPin className="w-3.5 h-3.5" />
+                    2. Endereço de Origem das Postagens (Cálculo de Frete)
+                  </h4>
+                  <div className="space-y-3">
+                    <div>
+                      <label className="block text-[11px] text-zinc-400 mb-1">CEP de Origem *</label>
+                      <div className="flex gap-2 max-w-sm">
+                        <input
+                          type="text"
+                          maxLength={9}
+                          value={ownerCep}
+                          onChange={(e) => setOwnerCep(e.target.value)}
+                          placeholder="01310-100"
+                          className="flex-1 bg-zinc-900 border border-zinc-700 rounded-xl px-3 py-2 text-xs text-white font-mono"
+                          required
+                        />
+                        <button
+                          type="button"
+                          onClick={handleLookupOwnerCep}
+                          disabled={lookingUpOwnerCep}
+                          className="bg-zinc-800 hover:bg-zinc-700 text-zinc-200 px-3 py-2 rounded-xl text-xs font-semibold flex items-center gap-1 border border-zinc-700"
+                        >
+                          <Search className="w-3.5 h-3.5" />
+                          {lookingUpOwnerCep ? 'Buscando...' : 'Buscar CEP'}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <div className="sm:col-span-2">
+                        <label className="block text-[11px] text-zinc-400 mb-1">Logradouro / Rua</label>
+                        <input
+                          type="text"
+                          value={ownerStreet}
+                          onChange={(e) => setOwnerStreet(e.target.value)}
+                          placeholder="Av. Paulista"
+                          className="w-full bg-zinc-900 border border-zinc-700 rounded-xl px-3 py-2 text-xs text-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] text-zinc-400 mb-1">Número</label>
+                        <input
+                          type="text"
+                          value={ownerNumber}
+                          onChange={(e) => setOwnerNumber(e.target.value)}
+                          placeholder="1000"
+                          className="w-full bg-zinc-900 border border-zinc-700 rounded-xl px-3 py-2 text-xs text-white"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <div>
+                        <label className="block text-[11px] text-zinc-400 mb-1">Bairro</label>
+                        <input
+                          type="text"
+                          value={ownerNeighborhood}
+                          onChange={(e) => setOwnerNeighborhood(e.target.value)}
+                          placeholder="Bela Vista"
+                          className="w-full bg-zinc-900 border border-zinc-700 rounded-xl px-3 py-2 text-xs text-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] text-zinc-400 mb-1">Cidade</label>
+                        <input
+                          type="text"
+                          value={ownerCity}
+                          onChange={(e) => setOwnerCity(e.target.value)}
+                          placeholder="São Paulo"
+                          className="w-full bg-zinc-900 border border-zinc-700 rounded-xl px-3 py-2 text-xs text-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] text-zinc-400 mb-1">UF (Estado)</label>
+                        <input
+                          type="text"
+                          maxLength={2}
+                          value={ownerState}
+                          onChange={(e) => setOwnerState(e.target.value.toUpperCase())}
+                          placeholder="SP"
+                          className="w-full bg-zinc-900 border border-zinc-700 rounded-xl px-3 py-2 text-xs text-white uppercase font-bold"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* PIX Receiving Account */}
+                <div className="bg-zinc-950/60 p-4 rounded-2xl border border-zinc-800 space-y-3">
+                  <h4 className="text-xs font-bold text-emerald-400 uppercase tracking-wider flex items-center gap-1.5">
+                    <CreditCard className="w-3.5 h-3.5" />
+                    3. Dados para Recebimento via PIX (Exibidos no Checkout da Loja)
+                  </h4>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-[11px] text-zinc-400 mb-1">Tipo de Chave PIX</label>
+                      <select
+                        value={ownerPixKeyType}
+                        onChange={(e) => setOwnerPixKeyType(e.target.value as any)}
+                        className="w-full bg-zinc-900 border border-zinc-700 rounded-xl px-3 py-2 text-xs text-white"
+                      >
+                        <option value="email">E-mail</option>
+                        <option value="cpf">CPF / CNPJ</option>
+                        <option value="phone">Telefone</option>
+                        <option value="random">Chave Aleatória</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] text-zinc-400 mb-1">Chave PIX da Loja *</label>
+                      <input
+                        type="text"
+                        value={ownerPixKey}
+                        onChange={(e) => setOwnerPixKey(e.target.value)}
+                        placeholder="neto.mmp@gmail.com"
+                        className="w-full bg-zinc-900 border border-zinc-700 rounded-xl px-3 py-2 text-xs text-white font-mono"
+                        required
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] text-zinc-400 mb-1">Nome do Titular da Conta</label>
+                      <input
+                        type="text"
+                        value={ownerAccountHolder}
+                        onChange={(e) => setOwnerAccountHolder(e.target.value)}
+                        placeholder="Neto MMP"
+                        className="w-full bg-zinc-900 border border-zinc-700 rounded-xl px-3 py-2 text-xs text-white"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] text-zinc-400 mb-1">Banco (Opcional)</label>
+                      <input
+                        type="text"
+                        value={ownerBankName}
+                        onChange={(e) => setOwnerBankName(e.target.value)}
+                        placeholder="Ex: Nubank / Itaú / Inter"
+                        className="w-full bg-zinc-900 border border-zinc-700 rounded-xl px-3 py-2 text-xs text-white"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <button
+                  type="submit"
+                  className="bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-black font-extrabold px-6 py-3 rounded-xl text-xs shadow-lg transition-transform active:scale-95 flex items-center gap-2"
+                >
+                  <CheckCircle2 className="w-4 h-4" />
+                  Salvar Dados do Responsável
+                </button>
+              </form>
+            </div>
+          )}
+
           {/* TAB 1: NOVA PUBLICAÇÃO (Com Câmera, Lotes e Leitura IA) */}
           {activeTab === 'new-hq' && (
             <div className="bg-[#111520] border border-zinc-800 rounded-3xl p-5 sm:p-7 space-y-6">
@@ -749,13 +1009,13 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                     Abrir Câmera do Dispositivo
                   </button>
 
-                  <label className="bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 font-bold px-4 py-2.5 rounded-xl text-xs flex items-center gap-1.5 cursor-pointer transition-colors shadow">
-                    <Upload className="w-4 h-4" />
-                    Carregar Fotos do Computador / Celular
+                  <label className="bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-semibold px-4 py-2.5 rounded-xl text-xs flex items-center gap-1.5 cursor-pointer border border-zinc-700">
+                    <Upload className="w-4 h-4 text-amber-400" />
+                    Carregar Fotos do Dispositivo
                     <input
                       type="file"
-                      multiple
                       accept="image/*"
+                      multiple
                       onChange={handleFileUpload}
                       className="hidden"
                     />
@@ -764,27 +1024,30 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                   {formImages.length > 0 && (
                     <button
                       type="button"
-                      onClick={handleAnalyzeWithAI}
-                      disabled={analyzingWithAI}
-                      className="bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-extrabold px-4 py-2.5 rounded-xl text-xs flex items-center gap-1.5 shadow-lg animate-in fade-in"
+                      onClick={() => setFormImages([])}
+                      className="text-zinc-400 hover:text-rose-400 text-xs px-2 py-1"
                     >
-                      <Sparkles className="w-4 h-4" />
-                      {analyzingWithAI ? 'Analisando com IA...' : 'Ler Capa(s) e Preencher Dados'}
+                      Limpar fotos
                     </button>
                   )}
                 </div>
 
-                {/* Camera Viewport */}
+                {/* Camera Modal */}
                 {cameraActive && (
-                  <div className="bg-black rounded-2xl p-4 border border-zinc-700 max-w-sm space-y-3">
-                    <video ref={videoRef} autoPlay playsInline className="w-full rounded-xl bg-zinc-900" />
-                    <div className="flex gap-2">
+                  <div className="bg-zinc-950 p-4 rounded-2xl border border-zinc-800 max-w-md mx-auto space-y-3">
+                    <video
+                      ref={videoRef}
+                      autoPlay
+                      playsInline
+                      className="w-full h-64 object-cover rounded-xl bg-black"
+                    />
+                    <div className="flex justify-center gap-3">
                       <button
                         type="button"
                         onClick={capturePhoto}
-                        className="flex-1 bg-amber-500 text-black font-bold py-2 rounded-xl text-xs"
+                        className="bg-amber-500 text-black font-bold px-5 py-2 rounded-xl text-xs"
                       >
-                        Capturar Foto
+                        Tirar Foto
                       </button>
                       <button
                         type="button"
@@ -793,7 +1056,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                           stream?.getTracks().forEach((track) => track.stop());
                           setCameraActive(false);
                         }}
-                        className="bg-zinc-800 text-zinc-300 py-2 px-3 rounded-xl text-xs"
+                        className="text-zinc-400 hover:text-white text-xs px-3"
                       >
                         Cancelar
                       </button>
@@ -801,53 +1064,116 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                   </div>
                 )}
 
-                {/* Previews */}
+                {/* Previews of Captured Photos */}
                 {formImages.length > 0 && (
-                  <div className="flex gap-3 overflow-x-auto pb-2 scrollbar-thin pt-2">
+                  <div className="flex gap-2 overflow-x-auto py-2">
                     {formImages.map((img, idx) => (
-                      <div key={idx} className="relative w-20 h-28 shrink-0 rounded-xl overflow-hidden border border-zinc-700 bg-black group">
-                        <img src={img} alt={`Foto ${idx + 1}`} className="w-full h-full object-cover" />
+                      <div key={idx} className="relative group shrink-0">
+                        <img
+                          src={img}
+                          alt={`Capa ${idx + 1}`}
+                          className="w-20 h-28 object-cover rounded-lg border border-zinc-700"
+                        />
                         <button
                           type="button"
                           onClick={() => setFormImages((prev) => prev.filter((_, i) => i !== idx))}
-                          className="absolute top-1 right-1 bg-rose-600 text-white rounded-full p-1 opacity-80 hover:opacity-100"
+                          className="absolute -top-1 -right-1 bg-rose-600 text-white rounded-full p-1 shadow hover:bg-rose-500"
                         >
-                          ✕
+                          <Trash2 className="w-3 h-3" />
                         </button>
                       </div>
                     ))}
                   </div>
                 )}
 
+                {/* AI Trigger Button */}
+                {formImages.length > 0 && (
+                  <div className="pt-2">
+                    <button
+                      type="button"
+                      onClick={handleAnalyzeWithAI}
+                      disabled={analyzingWithAI}
+                      className="bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-extrabold px-5 py-2.5 rounded-xl text-xs flex items-center gap-2 shadow-lg transition-transform active:scale-95"
+                    >
+                      <Sparkles className="w-4 h-4 text-amber-300" />
+                      {analyzingWithAI ? 'Lendo Capas com IA...' : 'Analisar e Preencher Automaticamente com IA'}
+                    </button>
+                  </div>
+                )}
+
                 {aiAnalysisFeedback && (
-                  <div className="p-3 bg-emerald-950/60 border border-emerald-800/80 rounded-xl text-xs text-emerald-300 flex items-center gap-2">
-                    <Sparkles className="w-4 h-4 shrink-0 text-emerald-400" />
+                  <div className="bg-purple-950/40 border border-purple-800/60 p-3 rounded-xl text-xs text-purple-200 flex items-center gap-2 animate-in fade-in">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
                     <span>{aiAnalysisFeedback}</span>
+                  </div>
+                )}
+
+                {aiAnalysisError && (
+                  <div className="bg-rose-950/60 border border-rose-800 p-3.5 rounded-xl text-xs text-rose-200 space-y-1.5 animate-in fade-in">
+                    <div className="flex items-center gap-2 font-bold text-rose-300">
+                      <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+                      <span>Aviso de Leitura da IA</span>
+                    </div>
+                    <p>{aiAnalysisError}</p>
+                    <p className="text-[11px] text-zinc-400 pt-1">
+                      Você pode preencher os campos manualmente abaixo ou configurar sua chave do Gemini na aba <strong>Configurações & Chaves</strong>.
+                    </p>
                   </div>
                 )}
               </div>
 
-              {/* Form Fields */}
-              <form onSubmit={handleSaveHQ} className="space-y-4 pt-2 border-t border-zinc-800">
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              {/* Publication Form */}
+              <form onSubmit={handleSubmitNewHQ} className="space-y-4 pt-4 border-t border-zinc-800">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="sm:col-span-2">
-                    <label className="block text-xs font-semibold text-zinc-300 mb-1">Título do Anúncio</label>
+                    <label className="block text-xs font-semibold text-zinc-300 mb-1">
+                      Título do Anúncio *
+                    </label>
                     <input
                       type="text"
                       value={formTitle}
                       onChange={(e) => setFormTitle(e.target.value)}
-                      placeholder="Ex: O Espetacular Homem-Aranha #12 - O Retorno do Duende"
-                      className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-amber-500"
+                      placeholder="Ex: Coleção Homem-Aranha Clássico (10 Edições) ou O Incrível Hulk #42"
+                      className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3.5 py-2 text-xs text-white"
                       required
                     />
                   </div>
 
                   <div>
-                    <label className="block text-xs font-semibold text-zinc-300 mb-1">Editora</label>
+                    <label className="block text-xs font-semibold text-zinc-300 mb-1">
+                      Série da Revista *
+                    </label>
+                    <input
+                      type="text"
+                      value={formSeries}
+                      onChange={(e) => setFormSeries(e.target.value)}
+                      placeholder="Ex: Grandes Heróis Marvel"
+                      className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3.5 py-2 text-xs text-white"
+                      required
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-zinc-300 mb-1">
+                      Personagem / Categoria da Coleção
+                    </label>
+                    <input
+                      type="text"
+                      value={formFranchise}
+                      onChange={(e) => setFormFranchise(e.target.value)}
+                      placeholder="Ex: Homem-Aranha, Batman, Wolverine"
+                      className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3.5 py-2 text-xs text-white"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-zinc-300 mb-1">
+                      Editora
+                    </label>
                     <select
                       value={formPublisher}
-                      onChange={(e: any) => setFormPublisher(e.target.value)}
-                      className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-amber-500"
+                      onChange={(e) => setFormPublisher(e.target.value as any)}
+                      className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3.5 py-2 text-xs text-white"
                     >
                       <option value="Editora Abril">Editora Abril</option>
                       <option value="Panini">Panini</option>
@@ -855,160 +1181,162 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                       <option value="DC Comics">DC Comics</option>
                       <option value="Image Comics">Image Comics</option>
                       <option value="Dark Horse">Dark Horse</option>
-                      <option value="Outra">Outra</option>
+                      <option value="Outra">Outra / EBAL / Bloch</option>
                     </select>
                   </div>
 
                   <div>
-                    <label className="block text-xs font-semibold text-zinc-300 mb-1">Franquia / Personagem Principal</label>
-                    <input
-                      type="text"
-                      value={formFranchise}
-                      onChange={(e) => setFormFranchise(e.target.value)}
-                      placeholder="Ex: Homem-Aranha, Batman, X-Men..."
-                      className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-amber-500"
-                      required
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-semibold text-zinc-300 mb-1">Série</label>
-                    <input
-                      type="text"
-                      value={formSeries}
-                      onChange={(e) => setFormSeries(e.target.value)}
-                      placeholder="Ex: Grandes Clássicos dos Quadrinhos"
-                      className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-amber-500"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-semibold text-zinc-300 mb-1">Número / Edição</label>
+                    <label className="block text-xs font-semibold text-zinc-300 mb-1">
+                      Número da Edição (ou Intervalo)
+                    </label>
                     <input
                       type="text"
                       value={formIssueNumber}
                       onChange={(e) => setFormIssueNumber(e.target.value)}
-                      placeholder="Ex: 01 ou Lote #01 ao #05"
-                      className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-amber-500"
+                      placeholder="Ex: #01 ou #01 ao #10"
+                      className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3.5 py-2 text-xs text-white"
                     />
                   </div>
 
                   <div>
-                    <label className="block text-xs font-semibold text-zinc-300 mb-1">Ano de Lançamento</label>
+                    <label className="block text-xs font-semibold text-zinc-300 mb-1">
+                      Ano de Publicação
+                    </label>
                     <input
                       type="number"
                       value={formYear}
                       onChange={(e) => setFormYear(Number(e.target.value))}
-                      className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-amber-500"
+                      className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3.5 py-2 text-xs text-white"
                     />
                   </div>
 
                   <div>
-                    <label className="block text-xs font-semibold text-zinc-300 mb-1">Estado de Conservação</label>
+                    <label className="block text-xs font-semibold text-zinc-300 mb-1">
+                      Estado de Conservação
+                    </label>
                     <select
                       value={formCondition}
-                      onChange={(e: any) => setFormCondition(e.target.value)}
-                      className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-amber-500"
+                      onChange={(e) => setFormCondition(e.target.value as ConditionGrade)}
+                      className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3.5 py-2 text-xs text-white"
                     >
-                      <option value="otimo">Ótimo (Sem dobras, grampos bons)</option>
-                      <option value="bom">Bom (Sem ferrugem pesada, marcas normais)</option>
-                      <option value="ruim">Regular (Marcas do tempo, oxidação)</option>
-                      <option value="leitura">Apenas Leitura (Desgaste severo - R$ 1,00)</option>
+                      <option value="otimo">Ótimo (Grampos bons, sem dobras marcantes)</option>
+                      <option value="bom">Bom (Sem oxidação grave, marcas leves normais de tempo)</option>
+                      <option value="ruim">Ruim (Marcas de dobras ou desgastes visíveis)</option>
+                      <option value="leitura">Apenas para Leitura (Desgaste severo, miolo 100% completo)</option>
                     </select>
                   </div>
 
-                  <div>
-                    <label className="block text-xs font-semibold text-zinc-300 mb-1">Preço Final do Anúncio (R$)</label>
-                    <input
-                      type="number"
-                      step="0.50"
-                      value={formPrice}
-                      onChange={(e) => setFormPrice(Number(e.target.value))}
-                      className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3.5 py-2 text-sm font-black text-amber-400 focus:outline-none focus:border-amber-500"
-                      required
+                  {/* Lot & Pricing Options */}
+                  <div className="sm:col-span-2 bg-zinc-950/70 p-4 rounded-2xl border border-zinc-800 space-y-3">
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        id="isCollectionCheck"
+                        checked={formIsCollection}
+                        onChange={(e) => setFormIsCollection(e.target.checked)}
+                        className="accent-amber-500 w-4 h-4 rounded"
+                      />
+                      <label htmlFor="isCollectionCheck" className="text-xs font-bold text-white cursor-pointer">
+                        Este anúncio é uma Coleção / Lote com múltiplas edições
+                      </label>
+                    </div>
+
+                    {formIsCollection ? (
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2">
+                        <div>
+                          <label className="block text-[11px] text-zinc-400 mb-1">
+                            Qtd de Edições no Lote
+                          </label>
+                          <input
+                            type="number"
+                            min={2}
+                            value={formCollectionCount}
+                            onChange={(e) => setFormCollectionCount(Number(e.target.value))}
+                            className="w-full bg-zinc-900 border border-zinc-700 rounded-xl px-3 py-1.5 text-xs text-white"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[11px] text-zinc-400 mb-1">
+                            Preço do Lote Fechado (com Desconto) *
+                          </label>
+                          <input
+                            type="number"
+                            step="0.5"
+                            value={formBundlePrice}
+                            onChange={(e) => {
+                              const val = Number(e.target.value);
+                              setFormBundlePrice(val);
+                              setFormPrice(val);
+                            }}
+                            className="w-full bg-zinc-900 border border-zinc-700 rounded-xl px-3 py-1.5 text-xs text-amber-400 font-bold"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[11px] text-zinc-400 mb-1">
+                            Preço por Edição Avulsa
+                          </label>
+                          <input
+                            type="number"
+                            step="0.5"
+                            value={formUnitPrice}
+                            onChange={(e) => setFormUnitPrice(Number(e.target.value))}
+                            className="w-full bg-zinc-900 border border-zinc-700 rounded-xl px-3 py-1.5 text-xs text-zinc-200"
+                          />
+                        </div>
+
+                        <div className="sm:col-span-3 flex items-center gap-2 pt-1">
+                          <input
+                            type="checkbox"
+                            id="allowsUnitCheck"
+                            checked={formAllowsUnitPurchase}
+                            onChange={(e) => setFormAllowsUnitPurchase(e.target.checked)}
+                            className="accent-amber-500 w-3.5 h-3.5"
+                          />
+                          <label htmlFor="allowsUnitCheck" className="text-xs text-zinc-300">
+                            Permitir que o cliente compre exemplares avulsos além do pacote fechado
+                          </label>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="max-w-xs">
+                        <label className="block text-[11px] text-zinc-400 mb-1">
+                          Preço da Revista (R$) *
+                        </label>
+                        <input
+                          type="number"
+                          step="0.5"
+                          value={formPrice}
+                          onChange={(e) => setFormPrice(Number(e.target.value))}
+                          className="w-full bg-zinc-900 border border-zinc-700 rounded-xl px-3 py-2 text-xs text-amber-400 font-bold"
+                          required
+                        />
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="sm:col-span-2">
+                    <label className="block text-xs font-semibold text-zinc-300 mb-1">
+                      Sinopse e Detalhes
+                    </label>
+                    <textarea
+                      rows={3}
+                      value={formDescription}
+                      onChange={(e) => setFormDescription(e.target.value)}
+                      placeholder="Breve descrição da edição, arco e roteiro."
+                      className="w-full bg-zinc-950 border border-zinc-700 rounded-xl p-3 text-xs text-white"
                     />
                   </div>
                 </div>
 
-                {/* Collection & Lot Options */}
-                <div className="p-4 bg-zinc-950/60 rounded-2xl border border-zinc-800 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <label className="flex items-center gap-2 cursor-pointer text-xs font-bold text-white">
-                      <input
-                        type="checkbox"
-                        checked={formIsCollection}
-                        onChange={(e) => setFormIsCollection(e.target.checked)}
-                        className="rounded accent-amber-500"
-                      />
-                      <span>Este anúncio é um Lote / Coleção com várias edições</span>
-                    </label>
-
-                    <button
-                      type="button"
-                      onClick={apply1RealReadingSpecial}
-                      className="text-xs bg-rose-950/50 hover:bg-rose-900/60 text-rose-300 border border-rose-800/80 px-3 py-1 rounded-xl flex items-center gap-1"
-                    >
-                      <Flame className="w-3.5 h-3.5" />
-                      Atalho: R$ 1,00 para Leitura
-                    </button>
-                  </div>
-
-                  {formIsCollection && (
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 border-t border-zinc-800/60 text-xs">
-                      <div>
-                        <label className="block text-zinc-400 mb-1">Quantidade de HQs no Lote</label>
-                        <input
-                          type="number"
-                          value={formCollectionCount}
-                          onChange={(e) => setFormCollectionCount(Number(e.target.value))}
-                          className="w-full bg-zinc-900 border border-zinc-700 rounded-xl px-3 py-1.5 text-xs text-white"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-zinc-400 mb-1">Preço do Lote com Desconto (R$)</label>
-                        <input
-                          type="number"
-                          step="0.50"
-                          value={formBundlePrice}
-                          onChange={(e) => {
-                            setFormBundlePrice(Number(e.target.value));
-                            setFormPrice(Number(e.target.value));
-                          }}
-                          className="w-full bg-zinc-900 border border-zinc-700 rounded-xl px-3 py-1.5 text-xs text-amber-400 font-bold"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-zinc-400 mb-1">Preço de Cada Unidade Avulsa (R$)</label>
-                        <input
-                          type="number"
-                          step="0.50"
-                          value={formUnitPrice}
-                          onChange={(e) => setFormUnitPrice(Number(e.target.value))}
-                          className="w-full bg-zinc-900 border border-zinc-700 rounded-xl px-3 py-1.5 text-xs text-white"
-                        />
-                      </div>
-                    </div>
-                  )}
+                <div className="pt-2">
+                  <button
+                    type="submit"
+                    className="w-full bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-black font-extrabold py-3.5 rounded-xl text-xs transition-transform active:scale-95 shadow-lg flex items-center justify-center gap-2"
+                  >
+                    <CheckCircle2 className="w-4 h-4" />
+                    Publicar HQ no Catálogo Oficial
+                  </button>
                 </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-zinc-300 mb-1">Sinopse / Descrição Editorial</label>
-                  <textarea
-                    rows={2}
-                    value={formDescription}
-                    onChange={(e) => setFormDescription(e.target.value)}
-                    placeholder="Descrição direta do arco, história e personagens..."
-                    className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-amber-500 resize-none"
-                  />
-                </div>
-
-                <button
-                  type="submit"
-                  className="w-full bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-black font-black py-3 rounded-xl text-xs flex items-center justify-center gap-2 shadow-xl active:scale-95 transition-transform"
-                >
-                  <CheckCircle2 className="w-4 h-4" />
-                  Salvar e Publicar no Catálogo da HQ Master
-                </button>
               </form>
             </div>
           )}
@@ -1016,150 +1344,64 @@ export const AdminPage: React.FC<AdminPageProps> = ({
           {/* TAB 2: CATÁLOGO & ESTOQUE */}
           {activeTab === 'catalog' && (
             <div className="space-y-4">
-              {/* Hidden Inputs for File Actions */}
-              <input
-                type="file"
-                ref={bulkFileInputRef}
-                multiple
-                accept="image/*"
-                className="hidden"
-                onChange={handleBulkPhotoUpload}
-              />
-              <input
-                type="file"
-                ref={replaceItemPhotoRef}
-                accept="image/*"
-                className="hidden"
-                onChange={handleReplaceItemPhoto}
-              />
-
-              {bulkUploadMsg && (
-                <div className="bg-emerald-950/70 border border-emerald-800 text-emerald-300 text-xs p-3.5 rounded-2xl flex items-center justify-between shadow-lg">
-                  <div className="flex items-center gap-2">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-                    <span className="font-semibold">{bulkUploadMsg}</span>
-                  </div>
-                  <button onClick={() => setBulkUploadMsg(null)} className="text-xs text-emerald-400 hover:underline">
-                    Fechar
-                  </button>
-                </div>
-              )}
-
-              {/* Action Bar */}
-              <div className="flex flex-wrap items-center justify-between gap-3 bg-[#111520] border border-zinc-800 p-4 rounded-2xl">
+              <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
-                  <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                    <Layers className="w-4 h-4 text-amber-400" />
-                    Acervo Cadastrado ({hqs.length} edições ativas)
+                  <h3 className="text-base font-black text-white font-['Space_Grotesk']">
+                    Catálogo e Estoque Ativo ({hqs.length} revistas)
                   </h3>
-                  <p className="text-[11px] text-zinc-400 mt-0.5">
-                    Somente os itens reais que você ou seus colaboradores cadastrarem aparecem aqui.
+                  <p className="text-xs text-zinc-400">
+                    Gerencie os exemplares cadastrados por você e seus parceiros.
                   </p>
-                </div>
-
-                <div className="flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => bulkFileInputRef.current?.click()}
-                    className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-3.5 py-2 rounded-xl text-xs flex items-center gap-1.5 shadow"
-                  >
-                    <Upload className="w-3.5 h-3.5" />
-                    Subir Fotos Reais em Lote
-                  </button>
-
-                  <button
-                    onClick={() => setActiveTab('new-hq')}
-                    className="bg-amber-500 hover:bg-amber-400 text-black font-bold px-3.5 py-2 rounded-xl text-xs flex items-center gap-1.5 shadow"
-                  >
-                    <Camera className="w-3.5 h-3.5" />
-                    + Cadastrar Revista
-                  </button>
                 </div>
               </div>
 
               {hqs.length === 0 ? (
-                <div className="border border-zinc-800 rounded-3xl p-12 text-center text-zinc-500 text-xs space-y-3 bg-[#10141f]">
-                  <Package className="w-10 h-10 mx-auto text-zinc-600" />
-                  <p className="text-sm font-semibold text-zinc-200">Seu acervo próprio está 100% limpo e pronto.</p>
-                  <p className="text-xs text-zinc-400 max-w-md mx-auto">
-                    Nenhum produto fictício. Use os botões acima para fotografar seus gibis ou carregar suas fotos reais em lote.
-                  </p>
-                  <div className="flex justify-center gap-3 pt-2">
-                    <button
-                      onClick={() => bulkFileInputRef.current?.click()}
-                      className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-4 py-2 rounded-xl text-xs flex items-center gap-1.5"
-                    >
-                      <Upload className="w-3.5 h-3.5" />
-                      Subir Minhas Fotos Reais
-                    </button>
-                    <button
-                      onClick={() => setActiveTab('new-hq')}
-                      className="bg-amber-500 hover:bg-amber-400 text-black font-bold px-4 py-2 rounded-xl text-xs flex items-center gap-1.5"
-                    >
-                      <Camera className="w-3.5 h-3.5" />
-                      Fotografar com a Câmera
-                    </button>
-                  </div>
+                <div className="bg-[#111520] border border-zinc-800 rounded-3xl p-12 text-center space-y-3">
+                  <Package className="w-10 h-10 text-zinc-700 mx-auto" />
+                  <p className="text-xs text-zinc-400">Nenhuma revista cadastrada no momento.</p>
+                  <button
+                    onClick={() => setActiveTab('new-hq')}
+                    className="bg-amber-500 text-black font-bold px-4 py-2 rounded-xl text-xs"
+                  >
+                    Cadastrar Primeira Revista
+                  </button>
                 </div>
               ) : (
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                  {hqs.map((item) => (
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                  {hqs.map((hq) => (
                     <div
-                      key={item.id}
-                      className="bg-[#111520] border border-zinc-800 rounded-2xl p-3.5 flex gap-3 items-center justify-between group hover:border-zinc-700 transition-colors"
+                      key={hq.id}
+                      className="bg-[#111520] border border-zinc-800 rounded-2xl p-3.5 space-y-3 flex flex-col justify-between"
                     >
-                      <div className="relative shrink-0">
+                      <div className="space-y-2">
                         <img
-                          src={item.images[0]}
-                          alt={item.title}
-                          className="w-14 h-20 object-cover rounded-lg bg-zinc-950 border border-zinc-800"
+                          src={hq.images[0] || 'https://images.unsplash.com/photo-1601645191163-3fc0d5d34e35?auto=format&fit=crop&w=400&q=80'}
+                          alt={hq.title}
+                          className="w-full h-44 object-cover rounded-xl bg-zinc-950 border border-zinc-800"
                         />
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setTargetReplaceHqId(item.id);
-                            replaceItemPhotoRef.current?.click();
-                          }}
-                          className="absolute inset-0 bg-black/70 opacity-0 group-hover:opacity-100 transition-opacity rounded-lg flex items-center justify-center text-[10px] text-amber-300 font-bold text-center px-1"
-                        >
-                          Trocar Foto
-                        </button>
-                      </div>
-
-                      <div className="min-w-0 flex-1">
-                        <span className="text-[10px] font-bold text-amber-400 block truncate">
-                          {item.franchiseCategory} • Ed. #{item.issueNumber}
-                        </span>
-                        <h4 className="text-xs font-bold text-white truncate" title={item.title}>{item.title}</h4>
-                        <span className="text-[10px] text-zinc-400 block truncate">
-                          Vendido por: {item.sellerName}
-                        </span>
-                        <div className="flex items-center gap-2 mt-1">
-                          <span className="text-xs font-black text-amber-400 font-['Space_Grotesk']">
-                            {formatBRL(item.price)}
+                        <div>
+                          <h4 className="text-xs font-bold text-white truncate">{hq.title}</h4>
+                          <span className="text-[11px] text-zinc-400 block">{hq.publisher} • {hq.year}</span>
+                          <span className="text-xs font-black text-amber-400 font-['Space_Grotesk'] block mt-1">
+                            {formatBRL(hq.price)}
                           </span>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setTargetReplaceHqId(item.id);
-                              replaceItemPhotoRef.current?.click();
-                            }}
-                            className="text-[10px] text-zinc-400 hover:text-amber-300 underline"
-                          >
-                            Trocar foto
-                          </button>
                         </div>
                       </div>
 
-                      <button
-                        onClick={() => {
-                          if (confirm(`Excluir "${item.title}" do acervo?`)) onDeleteHQ(item.id);
-                        }}
-                        className="text-zinc-500 hover:text-rose-400 p-2 rounded-lg hover:bg-zinc-800 transition-colors shrink-0"
-                        title="Excluir do catálogo"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                      <div className="flex items-center justify-between border-t border-zinc-800 pt-2 text-xs">
+                        <span className="text-[10px] text-zinc-500">
+                          {hq.sellerName}
+                        </span>
+                        <button
+                          onClick={() => {
+                            if (confirm(`Excluir ${hq.title}?`)) onDeleteHQ(hq.id);
+                          }}
+                          className="text-zinc-500 hover:text-rose-400 p-1"
+                          title="Excluir"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -1167,40 +1409,56 @@ export const AdminPage: React.FC<AdminPageProps> = ({
             </div>
           )}
 
-          {/* TAB 3: GESTÃO DE COLABORADORES (Exclusivo do Master Neto) */}
+          {/* TAB 3: GESTÃO DE COLABORADORES */}
           {activeTab === 'collaborators' && currentSeller.role === 'master' && (
             <div className="space-y-6">
               <div>
                 <h3 className="text-base font-black text-white font-['Space_Grotesk']">
-                  Gestão de Parceiros & Colaboradores
+                  Gestão de Parceiros & Colaboradores Externos
                 </h3>
                 <p className="text-xs text-zinc-400">
-                  Cadastre seus parceiros, defina o login e a senha de acesso de cada um. O parceiro poderá acessar o painel para cadastrar revistas no próprio nome, e o repasse financeiro é controlado por você.
+                  Cadastre seus parceiros para venderem no catálogo da HQ Master. O repasse e controle financeiro fica sob sua responsabilidade.
                 </p>
+              </div>
+
+              {/* Master Owner Notice */}
+              <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-4 flex items-center justify-between gap-3 text-xs">
+                <div className="flex items-center gap-2 text-amber-300">
+                  <User className="w-4 h-4 text-amber-400 shrink-0" />
+                  <span>
+                    <strong>Proprietário Master:</strong> {currentSeller.name} ({currentSeller.email}) — Seus dados, CEP de envio e chave Pix são gerenciados na aba <strong>"Meu Perfil / Dados do Dono"</strong>.
+                  </span>
+                </div>
+                <button
+                  onClick={() => setActiveTab('owner-profile')}
+                  className="bg-amber-500 hover:bg-amber-400 text-black font-bold px-3 py-1.5 rounded-lg text-xs shrink-0"
+                >
+                  Abrir Meu Perfil
+                </button>
               </div>
 
               {/* Form to create collaborator */}
               <div className="bg-[#111520] border border-zinc-800 rounded-3xl p-5 sm:p-6 space-y-4 shadow-xl">
                 <h4 className="text-sm font-bold text-white flex items-center gap-2">
                   <Users className="w-4 h-4 text-amber-400" />
-                  Cadastrar Novo Colaborador
+                  Cadastrar Novo Colaborador Parceiro
                 </h4>
 
                 <form onSubmit={handleCreatePartner} className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
                   <div>
-                    <label className="block text-xs font-semibold text-zinc-300 mb-1">Nome do Parceiro</label>
+                    <label className="block text-xs font-semibold text-zinc-300 mb-1">Nome do Parceiro *</label>
                     <input
                       type="text"
                       value={cName}
                       onChange={(e) => setCName(e.target.value)}
-                      placeholder="Ex: João Silveira"
+                      placeholder="Ex: Carlos Mendes"
                       className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3.5 py-2 text-xs text-white"
                       required
                     />
                   </div>
 
                   <div>
-                    <label className="block text-xs font-semibold text-zinc-300 mb-1">Nome do Box / Loja do Parceiro</label>
+                    <label className="block text-xs font-semibold text-zinc-300 mb-1">Nome do Box / Banca do Parceiro</label>
                     <input
                       type="text"
                       value={cStoreName}
@@ -1212,7 +1470,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                   </div>
 
                   <div>
-                    <label className="block text-xs font-semibold text-zinc-300 mb-1">E-mail de Login do Parceiro</label>
+                    <label className="block text-xs font-semibold text-zinc-300 mb-1">E-mail de Login do Parceiro *</label>
                     <input
                       type="email"
                       value={cEmail}
@@ -1224,7 +1482,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                   </div>
 
                   <div>
-                    <label className="block text-xs font-semibold text-zinc-300 mb-1">Senha Criada por Você para ele</label>
+                    <label className="block text-xs font-semibold text-zinc-300 mb-1">Senha Gerada por Você para ele *</label>
                     <input
                       type="text"
                       value={cPassword}
@@ -1236,7 +1494,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                   </div>
 
                   <div>
-                    <label className="block text-xs font-semibold text-zinc-300 mb-1">CEP de Origem do Parceiro (Frete Correios)</label>
+                    <label className="block text-xs font-semibold text-zinc-300 mb-1">CEP de Postagem do Parceiro</label>
                     <input
                       type="text"
                       value={cCep}
@@ -1272,30 +1530,30 @@ export const AdminPage: React.FC<AdminPageProps> = ({
               {/* List of collaborators */}
               <div className="space-y-3">
                 <h4 className="text-xs font-bold text-zinc-300 uppercase tracking-wide">
-                  Colaboradores Registrados ({sellers.length})
+                  Colaboradores Parceiros Registrados ({externalPartners.length})
                 </h4>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  {sellers.map((s) => (
-                    <div key={s.id} className="bg-[#111520] border border-zinc-800 rounded-2xl p-4 space-y-2 text-xs">
-                      <div className="flex justify-between items-center">
-                        <strong className="text-white text-sm">{s.storeName}</strong>
-                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${s.role === 'master' ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30' : 'bg-zinc-800 text-zinc-300'}`}>
-                          {s.role === 'master' ? 'Proprietário Geral' : 'Colaborador'}
-                        </span>
-                      </div>
+                {externalPartners.length === 0 ? (
+                  <div className="border border-zinc-800 rounded-2xl p-8 text-center text-zinc-500 text-xs bg-[#10141f]">
+                    Nenhum colaborador externo cadastrado ainda. Use o formulário acima para adicionar parceiros.
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {externalPartners.map((s) => (
+                      <div key={s.id} className="bg-[#111520] border border-zinc-800 rounded-2xl p-4 space-y-2 text-xs">
+                        <div className="flex justify-between items-center">
+                          <strong className="text-white text-sm">{s.storeName}</strong>
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-zinc-800 text-zinc-300">
+                            Colaborador
+                          </span>
+                        </div>
 
-                      <div className="text-zinc-400">Responsável: {s.name}</div>
-                      <div className="text-zinc-400">Login: <code className="text-zinc-200 font-mono">{s.email}</code></div>
-                      <div className="text-zinc-400">Senha: <code className="text-amber-300 font-mono">{s.password || '••••••'}</code></div>
-                      <div className="text-zinc-500 text-[11px]">Origem: {s.address} • CEP {s.cep}</div>
+                        <div className="text-zinc-400">Responsável: {s.name}</div>
+                        <div className="text-zinc-400">Login: <code className="text-zinc-200 font-mono">{s.email}</code></div>
+                        <div className="text-zinc-400">Senha: <code className="text-amber-300 font-mono">{s.password || '••••••'}</code></div>
+                        <div className="text-zinc-500 text-[11px]">Origem: {s.address} • CEP {s.cep}</div>
 
-                      <div className="flex items-center justify-between pt-2 border-t border-zinc-800">
-                        <span className="text-amber-400 font-semibold">
-                          Vendas: {s.totalSales} edições ({formatBRL(s.totalEarnings)})
-                        </span>
-
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center justify-between pt-2 border-t border-zinc-800">
                           <button
                             type="button"
                             onClick={() => copyPartnerAccess(s)}
@@ -1303,10 +1561,10 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                             title="Copiar dados para enviar pelo WhatsApp"
                           >
                             <Share2 className="w-3.5 h-3.5" />
-                            {copiedPartnerId === s.id ? 'Copiado!' : 'Copiar Acesso'}
+                            {copiedPartnerId === s.id ? 'Copiado!' : 'Copiar Acesso para WhatsApp'}
                           </button>
 
-                          {s.role !== 'master' && onDeleteSeller && (
+                          {onDeleteSeller && (
                             <button
                               type="button"
                               onClick={() => {
@@ -1320,9 +1578,9 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                           )}
                         </div>
                       </div>
-                    </div>
-                  ))}
-                </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -1332,16 +1590,16 @@ export const AdminPage: React.FC<AdminPageProps> = ({
             <div className="space-y-4">
               <div>
                 <h3 className="text-base font-black text-white font-['Space_Grotesk']">
-                  Vendas, Códigos de Rastreio & Custódia de Pagamento
+                  Vendas, Pedidos & Códigos de Rastreio
                 </h3>
                 <p className="text-xs text-zinc-400">
-                  O dinheiro da venda fica sob custódia segura na conta principal. O repasse ao colaborador só é liberado após a confirmação do código de rastreamento e entrega ao comprador.
+                  Visualize os pedidos realizados, dados de entrega e libere os repasses aos colaboradores parceiros.
                 </p>
               </div>
 
               {orders.length === 0 ? (
                 <div className="border border-zinc-800 rounded-3xl p-12 text-center text-zinc-500 text-xs bg-[#10141f]">
-                  Nenhum pedido realizado até o momento.
+                  Nenhum pedido realizado até o momento. Todos os dados são reais e serão gerados conforme os clientes efetuam compras na loja.
                 </div>
               ) : (
                 <div className="space-y-3">
@@ -1350,13 +1608,18 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <div>
                           <span className="font-bold text-white text-sm">Pedido #{ord.orderNumber}</span>
-                          <span className="text-zinc-400 text-xs block">Comprador: {ord.buyerName} ({ord.buyerEmail})</span>
+                          <span className="text-zinc-400 text-xs block">
+                            Destinatário: {ord.buyerName} ({ord.buyerEmail}) • Tel: {ord.buyerPhone || 'N/I'}
+                          </span>
+                          <span className="text-zinc-500 text-[11px] block">
+                            Endereço: {ord.buyerAddress}
+                          </span>
                         </div>
                         <div className="text-right">
                           <span className="text-amber-400 font-black text-base font-['Space_Grotesk'] block">
                             {formatBRL(ord.total)}
                           </span>
-                          <span className="text-[10px] text-zinc-500 uppercase">{ord.status}</span>
+                          <span className="text-[10px] text-emerald-400 font-bold uppercase">{ord.status}</span>
                         </div>
                       </div>
 
@@ -1364,16 +1627,16 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                       <div className="space-y-1 text-xs border-t border-zinc-800/80 pt-2 text-zinc-300">
                         {ord.items.map((i, idx) => (
                           <div key={idx} className="flex justify-between">
-                            <span>{i.title} (Vendido por: {i.sellerName})</span>
+                            <span>{i.title} (Vendedor: {i.sellerName})</span>
                             <span className="font-semibold text-zinc-200">{formatBRL(i.price)}</span>
                           </div>
                         ))}
                       </div>
 
-                      {/* Tracking and Payout */}
+                      {/* Tracking */}
                       <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-zinc-800/80 text-xs">
                         <div className="flex items-center gap-2">
-                          <span className="text-zinc-400">Rastreio:</span>
+                          <span className="text-zinc-400">Rastreio Correios:</span>
                           <code className="text-amber-300 font-mono bg-zinc-900 px-2 py-0.5 rounded border border-zinc-800">
                             {ord.trackingCode}
                           </code>
@@ -1411,7 +1674,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                   Propostas de Desconto em Pacotes
                 </h3>
                 <p className="text-xs text-zinc-400">
-                  Propostas enviadas por colecionadores comprando pacotes de revistas. Requer aprovação de todos os vendedores envolvidos.
+                  Propostas enviadas por colecionadores comprando pacotes de revistas. Requer aprovação dos vendedores envolvidos.
                 </p>
               </div>
 
@@ -1422,37 +1685,33 @@ export const AdminPage: React.FC<AdminPageProps> = ({
               ) : (
                 <div className="space-y-3">
                   {proposals.map((prop) => (
-                    <div key={prop.id} className="bg-[#111520] border border-zinc-800 rounded-2xl p-4 space-y-2">
-                      <div className="flex justify-between items-center text-xs">
-                        <strong className="text-white text-sm">Proposta de {prop.buyerName}</strong>
-                        <span className="text-zinc-400">De {formatBRL(prop.originalTotal)} por <strong className="text-amber-400 text-sm">{formatBRL(prop.proposedTotal)}</strong></span>
-                      </div>
-
-                      <div className="space-y-1 text-xs text-zinc-400 pt-1 border-t border-zinc-800">
-                        {prop.itemsSummary.map((item, idx) => (
-                          <div key={idx} className="flex justify-between">
-                            <span>{item.title}</span>
-                            <span>{formatBRL(item.price)}</span>
-                          </div>
-                        ))}
-                      </div>
-
-                      <div className="flex items-center justify-between pt-2 border-t border-zinc-800 text-xs">
-                        <span className="text-zinc-400">Status: <strong className="text-amber-300">{prop.status}</strong></span>
-                        <div className="flex gap-2">
-                          <button
-                            onClick={() => onUpdateProposalApproval(prop.id, currentSeller.id, 'accepted')}
-                            className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-3 py-1 rounded-xl"
-                          >
-                            Aceitar Proposta
-                          </button>
-                          <button
-                            onClick={() => onUpdateProposalApproval(prop.id, currentSeller.id, 'declined')}
-                            className="bg-rose-600 hover:bg-rose-500 text-white font-bold px-3 py-1 rounded-xl"
-                          >
-                            Recusar
-                          </button>
+                    <div key={prop.id} className="bg-[#111520] border border-zinc-800 rounded-2xl p-4 space-y-3">
+                      <div className="flex justify-between items-start">
+                        <div>
+                          <span className="font-bold text-white text-sm">Colecionador: {prop.buyerName}</span>
+                          <span className="text-zinc-400 text-xs block">{prop.buyerEmail}</span>
                         </div>
+                        <div className="text-right">
+                          <span className="text-xs text-zinc-400 line-through block">{formatBRL(prop.originalTotal)}</span>
+                          <span className="text-emerald-400 font-black text-base font-['Space_Grotesk'] block">
+                            Proposta: {formatBRL(prop.proposedTotal)}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="flex justify-end gap-2 pt-2 border-t border-zinc-800">
+                        <button
+                          onClick={() => onUpdateProposalApproval(prop.id, currentSeller.id, 'accepted')}
+                          className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-3 py-1 rounded-xl text-xs"
+                        >
+                          Aceitar Desconto
+                        </button>
+                        <button
+                          onClick={() => onUpdateProposalApproval(prop.id, currentSeller.id, 'declined')}
+                          className="bg-rose-600 hover:bg-rose-500 text-white font-bold px-3 py-1 rounded-xl text-xs"
+                        >
+                          Recusar
+                        </button>
                       </div>
                     </div>
                   ))}
@@ -1461,7 +1720,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({
             </div>
           )}
 
-          {/* TAB 6: CONFIGURAÇÕES & CHAVES (Exclusivo do Master Neto) */}
+          {/* TAB 6: CONFIGURAÇÕES & CHAVES */}
           {activeTab === 'settings' && currentSeller.role === 'master' && (
             <div className="space-y-6">
               <div>
@@ -1489,19 +1748,64 @@ export const AdminPage: React.FC<AdminPageProps> = ({
 
                 <form onSubmit={handleSaveKeys} className="space-y-4">
                   <div>
-                    <label className="block text-xs font-semibold text-zinc-300 mb-1">
-                      Chave da API Google Gemini (GEMINI_API_KEY)
-                    </label>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-xs font-semibold text-zinc-300">
+                        Chave da API Google Gemini (GEMINI_API_KEY)
+                      </label>
+                      <a
+                        href="https://aistudio.google.com/app/apikey"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-[11px] text-amber-400 hover:underline flex items-center gap-1"
+                      >
+                        <ExternalLink className="w-3 h-3" />
+                        Obter Chave Gratuita no Google AI Studio
+                      </a>
+                    </div>
                     <input
-                      type="password"
+                      type="text"
                       value={geminiKeyInput}
-                      onChange={(e) => setGeminiKeyInput(e.target.value)}
+                      onChange={(e) => {
+                        setGeminiKeyInput(e.target.value);
+                        setTestAiResult(null);
+                      }}
                       placeholder="AIzaSy..."
                       className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3.5 py-2 text-xs text-white font-mono"
                     />
-                    <p className="text-[11px] text-zinc-500 mt-1">
-                      Utilizada para ler capas, identificar coleções e precificar gibis. Salva no seu painel e usada em chamadas diretas.
-                    </p>
+
+                    {/* Format Indicator */}
+                    {geminiKeyInput.trim().length > 0 && (
+                      <div className="mt-1.5 text-[11px]">
+                        {geminiKeyInput.trim().startsWith('AIzaSy') ? (
+                          <span className="text-emerald-400 font-semibold flex items-center gap-1">
+                            <CheckCircle2 className="w-3.5 h-3.5" /> Formato de chave Google Gemini válido (inicia com AIzaSy).
+                          </span>
+                        ) : (
+                          <span className="text-rose-400 font-semibold flex items-center gap-1">
+                            <AlertCircle className="w-3.5 h-3.5" /> Atenção: Chaves do Google Gemini sempre começam com "AIzaSy". A chave informada parece ser de outro serviço (Mercado Pago, OAuth ou Supabase).
+                          </span>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Test Key Button */}
+                    <div className="pt-2 flex items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={handleTestGeminiKey}
+                        disabled={testingAiKey || !geminiKeyInput.trim()}
+                        className="bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 font-bold px-3 py-1.5 rounded-xl text-xs flex items-center gap-1.5"
+                      >
+                        <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                        {testingAiKey ? 'Testando Conexão...' : 'Testar Conexão com Gemini'}
+                      </button>
+
+                      {testAiResult && (
+                        <span className={`text-xs font-semibold ${testAiResult.valid ? 'text-emerald-400' : 'text-rose-400'}`}>
+                          {testAiResult.valid ? '✅ Conexão bem-sucedida!' : `❌ ${testAiResult.message}`}
+                        </span>
+                      )}
+                    </div>
                   </div>
 
                   <div>
@@ -1509,14 +1813,14 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                       Mercado Pago Access Token (MERCADO_PAGO_ACCESS_TOKEN)
                     </label>
                     <input
-                      type="password"
+                      type="text"
                       value={mpTokenInput}
                       onChange={(e) => setMpTokenInput(e.target.value)}
-                      placeholder="APP_USR-..."
+                      placeholder="APP_USR-... ou TEST-..."
                       className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3.5 py-2 text-xs text-white font-mono"
                     />
                     <p className="text-[11px] text-zinc-500 mt-1">
-                      Token gerado no portal Mercado Pago Developers para receber pagamentos via Pix QR Code e Cartão.
+                      Token obtido no painel de desenvolvedor do Mercado Pago.
                     </p>
                   </div>
 
@@ -1587,26 +1891,6 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                 <pre className="bg-zinc-950 p-3 rounded-xl text-[11px] text-zinc-400 font-mono overflow-x-auto max-h-40 border border-zinc-800">
                   {SUPABASE_SQL_SCHEMA}
                 </pre>
-              </div>
-
-              {/* Step-by-Step Vercel Guide */}
-              <div className="bg-[#111520] border border-amber-500/20 rounded-3xl p-5 sm:p-6 space-y-3">
-                <h4 className="text-xs font-bold text-amber-300 uppercase tracking-wide">
-                  Como Configurar as Variáveis no Vercel (Produção Definitiva)
-                </h4>
-                <div className="text-xs text-zinc-400 space-y-2 leading-relaxed">
-                  <p>
-                    Quando você faz o commit no GitHub e deploy no Vercel, defina as variáveis em <strong>Settings &gt; Environment Variables</strong>:
-                  </p>
-                  <ul className="list-disc pl-5 space-y-1 text-zinc-300 font-mono text-[11px]">
-                    <li><strong className="text-amber-400">GEMINI_API_KEY</strong>: Sua chave do Google AI Studio.</li>
-                    <li><strong className="text-amber-400">MERCADO_PAGO_ACCESS_TOKEN</strong>: Seu token de produção do Mercado Pago.</li>
-                    <li><strong className="text-amber-400">APP_URL</strong>: A URL do seu domínio no Vercel (ex: https://seu-app.vercel.app).</li>
-                  </ul>
-                  <p className="text-[11px] text-zinc-500 pt-1">
-                    O arquivo <code className="text-zinc-300">vercel.json</code> que geramos cuida de compilar a pasta <code className="text-zinc-300">dist</code> e rodar os endpoints de backend como Serverless Functions.
-                  </p>
-                </div>
               </div>
             </div>
           )}

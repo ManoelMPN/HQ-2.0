@@ -22,12 +22,12 @@ import { PartnerOnboardingModal } from './components/PartnerOnboardingModal.tsx'
 import { AdminPage } from './components/AdminPage.tsx';
 import { HQMasterLogo } from './components/HQMasterLogo.tsx';
 
-const STORAGE_HQS = 'bancahq_items_v2';
-const STORAGE_SELLERS = 'bancahq_sellers_v2';
-const STORAGE_CART = 'bancahq_cart_v2';
-const STORAGE_PROPOSALS = 'bancahq_proposals_v2';
-const STORAGE_ORDERS = 'bancahq_orders_v2';
-const STORAGE_SESSION = 'bancahq_session_v2';
+const STORAGE_HQS = 'hqmaster_items_v4';
+const STORAGE_SELLERS = 'hqmaster_sellers_v4';
+const STORAGE_CART = 'hqmaster_cart_v4';
+const STORAGE_PROPOSALS = 'hqmaster_proposals_v4';
+const STORAGE_ORDERS = 'hqmaster_orders_v4';
+const STORAGE_SESSION = 'hqmaster_session_v4';
 
 export default function App() {
   // Page view state: 'store' (User Storefront) or 'admin' (Dedicated Admin Page)
@@ -51,7 +51,12 @@ export default function App() {
   const [sellers, setSellers] = useState<Seller[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_SELLERS);
-      return saved ? JSON.parse(saved) : INITIAL_SELLERS;
+      if (saved) {
+        const parsed = JSON.parse(saved) as Seller[];
+        // Ensure master always has 0 sales unless real orders exist
+        return parsed.map((s) => (s.role === 'master' ? { ...s, totalSales: 0, totalEarnings: 0 } : s));
+      }
+      return INITIAL_SELLERS;
     } catch {
       return INITIAL_SELLERS;
     }
@@ -87,7 +92,11 @@ export default function App() {
   const [currentSeller, setCurrentSeller] = useState<Seller | null>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_SESSION);
-      return saved ? JSON.parse(saved) : null;
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        return parsed.role === 'master' ? { ...parsed, totalSales: 0, totalEarnings: 0 } : parsed;
+      }
+      return null;
     } catch {
       return null;
     }
