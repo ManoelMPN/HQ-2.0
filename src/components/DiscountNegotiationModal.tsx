@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, MessageSquareQuote, CheckCircle, Sparkles, Send, Copy, Check, ArrowRight, Zap } from 'lucide-react';
+import { X, MessageSquareQuote, CheckCircle, Send, Copy, Check, ArrowRight, Zap } from 'lucide-react';
 import { CartItem, DiscountProposal, Seller } from '../types.ts';
 import { formatBRL, calculateAutoDiscountLimit, evaluateOfferAgainstPolicy } from '../utils/comicLogic.ts';
 
@@ -37,11 +37,7 @@ export const DiscountNegotiationModal: React.FC<DiscountNegotiationModalProps> =
 
   useEffect(() => {
     if (isOpen) {
-      const policy = calculateAutoDiscountLimit(cart, sellers);
-      const defaultOffer = policy.hasAutoAcceptEnabled
-        ? policy.minAutoAcceptedTotal
-        : Math.max(1, Math.round(subtotal * 0.85));
-      setProposedTotal(defaultOffer);
+      setProposedTotal(Math.max(1, Math.round(subtotal * 0.9)));
       setCreatedProposal(null);
       setCopiedLink(false);
     }
@@ -109,11 +105,11 @@ export const DiscountNegotiationModal: React.FC<DiscountNegotiationModalProps> =
                 <Zap className="w-7 h-7" />
               </div>
               <h3 className="text-xl font-black text-white font-['Space_Grotesk']">
-                Desconto Aceito Automaticamente!
+                Proposta Aceita!
               </h3>
               <p className="text-xs text-zinc-300 max-w-sm mx-auto leading-relaxed">
                 Sua proposta de <strong className="text-emerald-400">{formatBRL(createdProposal.proposedTotal)}</strong> (economia de{' '}
-                <strong className="text-amber-400">{formatBRL(createdProposal.originalTotal - createdProposal.proposedTotal)}</strong>) foi aprovada na hora!
+                <strong className="text-amber-400">{formatBRL(createdProposal.originalTotal - createdProposal.proposedTotal)}</strong>) foi aprovada e seu pagamento já está liberado!
               </p>
 
               {createdProposal.paymentLink && (
@@ -164,7 +160,7 @@ export const DiscountNegotiationModal: React.FC<DiscountNegotiationModalProps> =
                 Proposta Enviada ao Vendedor!
               </h3>
               <p className="text-xs text-zinc-300 max-w-sm mx-auto leading-relaxed">
-                Como sua oferta de <strong className="text-amber-400">{formatBRL(createdProposal.proposedTotal)}</strong> ({discountPercent}% OFF) ultrapassa o desconto automático imediato, ela foi enviada para análise no painel do vendedor.
+                Sua proposta de <strong className="text-amber-400">{formatBRL(createdProposal.proposedTotal)}</strong> ({discountPercent}% OFF) foi registrada e encaminhada para análise do vendedor.
               </p>
               <div className="bg-zinc-900 p-3 rounded-xl border border-zinc-800 text-[11px] text-zinc-400 text-left">
                 Assim que o vendedor aprovar a proposta, o link de pagamento com o desconto será liberado para você concluir o pedido com endereço e frete.
@@ -187,16 +183,7 @@ export const DiscountNegotiationModal: React.FC<DiscountNegotiationModalProps> =
             </div>
 
             <p className="text-xs text-zinc-300 leading-relaxed mb-4">
-              {policy.hasAutoAcceptEnabled ? (
-                <>
-                  Propostas de até <strong className="text-emerald-400">{policy.effectiveMaxDiscountPercent}% de desconto</strong> (valor a partir de{' '}
-                  <strong className="text-emerald-400">{formatBRL(policy.minAutoAcceptedTotal)}</strong>) são aceitas automaticamente com pagamento liberado na hora!
-                </>
-              ) : (
-                <>
-                  Envie sua proposta para {distinctSellersCount > 1 ? `os ${distinctSellersCount} vendedores envolvidos` : 'o vendedor'} avaliar no painel.
-                </>
-              )}
+              Informe o valor que deseja pagar pelos itens selecionados. Sua proposta será avaliada para {distinctSellersCount > 1 ? `os ${distinctSellersCount} vendedores envolvidos` : 'liberação de pagamento'}.
             </p>
 
             <form onSubmit={handleSubmit} className="space-y-4">
@@ -233,24 +220,6 @@ export const DiscountNegotiationModal: React.FC<DiscountNegotiationModalProps> =
                 <span className="text-[11px] text-zinc-500 mt-0.5 block">
                   Economia solicitada: {formatBRL(Math.max(0, subtotal - proposedTotal))}
                 </span>
-
-                {/* Live Policy Feedback */}
-                {proposedTotal > 0 && proposedTotal <= subtotal && (
-                  <div
-                    className={`mt-2 p-2.5 rounded-xl border text-[11px] flex items-center gap-2 ${
-                      offerEvaluation === 'auto_approve'
-                        ? 'bg-emerald-950/40 border-emerald-700/60 text-emerald-300'
-                        : 'bg-amber-950/30 border-amber-700/50 text-amber-200'
-                    }`}
-                  >
-                    <Sparkles className="w-4 h-4 shrink-0" />
-                    <span>
-                      {offerEvaluation === 'auto_approve'
-                        ? 'Desconto dentro do limite pré-aprovado! Ao confirmar, o link de pagamento será gerado na hora.'
-                        : 'Desconto acima da margem automática. Sua proposta será enviada para aprovação do vendedor.'}
-                    </span>
-                  </div>
-                )}
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -303,23 +272,10 @@ export const DiscountNegotiationModal: React.FC<DiscountNegotiationModalProps> =
               <button
                 type="submit"
                 disabled={offerEvaluation === 'invalid'}
-                className={`w-full font-extrabold py-3 rounded-xl text-xs flex items-center justify-center gap-2 transition-transform active:scale-95 shadow-lg ${
-                  offerEvaluation === 'auto_approve'
-                    ? 'bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-400 hover:to-emerald-500 text-black'
-                    : 'bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-black'
-                }`}
+                className="w-full bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-black font-extrabold py-3 rounded-xl text-xs flex items-center justify-center gap-2 transition-transform active:scale-95 shadow-lg"
               >
-                {offerEvaluation === 'auto_approve' ? (
-                  <>
-                    <Zap className="w-4 h-4" />
-                    Aceitar Desconto e Gerar Pagamento Agora
-                  </>
-                ) : (
-                  <>
-                    <Send className="w-4 h-4" />
-                    Enviar Proposta para Avaliação do Vendedor
-                  </>
-                )}
+                <Send className="w-4 h-4" />
+                Enviar Proposta de Valor
               </button>
             </form>
           </div>

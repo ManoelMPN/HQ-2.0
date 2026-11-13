@@ -1,12 +1,12 @@
-import React, { useState } from 'react';
-import { X, CheckCircle, ShieldCheck, HeartHandshake, Layers, Sparkles, Store, Calendar, ShoppingBag, ChevronLeft, ChevronRight } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { X, CheckCircle, Layers, Sparkles, Store, ShoppingBag, ChevronLeft, ChevronRight, Check } from 'lucide-react';
 import { HQItem } from '../types.ts';
-import { formatBRL, getConditionInfo } from '../utils/comicLogic.ts';
+import { formatBRL, getConditionInfo, parseIssueNumbersFromRange } from '../utils/comicLogic.ts';
 
 interface HQDetailModalProps {
   hq: HQItem | null;
   onClose: () => void;
-  onAddToCart: (hq: HQItem) => void;
+  onAddToCart: (hq: HQItem, selectedIssues?: string[]) => void;
   isInCart: boolean;
 }
 
@@ -16,14 +16,46 @@ export const HQDetailModal: React.FC<HQDetailModalProps> = ({
   onAddToCart,
   isInCart,
 }) => {
+  const [activePhotoIdx, setActivePhotoIdx] = useState(0);
+  const [purchaseMode, setPurchaseMode] = useState<'lot' | 'unit'>('lot');
+  const [selectedIssues, setSelectedIssues] = useState<string[]>([]);
+
+  useEffect(() => {
+    setActivePhotoIdx(0);
+    setPurchaseMode('lot');
+    setSelectedIssues([]);
+  }, [hq?.id]);
+
   if (!hq) return null;
 
-  const [activePhotoIdx, setActivePhotoIdx] = useState(0);
   const conditionMeta = getConditionInfo(hq.condition);
   const images = hq.images.length > 0 ? hq.images : ['https://images.unsplash.com/photo-1601645191163-3fc0d5d34e35?auto=format&fit=crop&w=800&q=80'];
 
   const nextPhoto = () => setActivePhotoIdx((prev) => (prev + 1) % images.length);
   const prevPhoto = () => setActivePhotoIdx((prev) => (prev - 1 + images.length) % images.length);
+
+  const canSelectAvulso = Boolean(hq.isCollection && hq.allowsUnitPurchase && hq.unitPrice && hq.unitPrice > 0);
+  const soldSet = new Set(hq.soldIssues || []);
+  const allLotIssues = hq.isCollection
+    ? parseIssueNumbersFromRange(hq.issueNumber, hq.collectionCount || 1)
+    : [];
+  const availableIssues = allLotIssues.filter((issue) => !soldSet.has(issue));
+
+  const lotDisplayPrice = hq.bundlePrice || hq.price;
+  const unitDisplayPrice = hq.unitPrice || hq.price;
+  const effectiveCheckoutPrice =
+    purchaseMode === 'unit' && canSelectAvulso
+      ? unitDisplayPrice * selectedIssues.length
+      : lotDisplayPrice;
+
+  const toggleIssue = (issue: string) => {
+    setSelectedIssues((prev) =>
+      prev.includes(issue) ? prev.filter((item) => item !== issue) : [...prev, issue]
+    );
+  };
+
+  const canConfirmPurchase =
+    !hq.isCollection || purchaseMode === 'lot' || (purchaseMode === 'unit' && selectedIssues.length > 0);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-black/85 backdrop-blur-md animate-in fade-in duration-200">
@@ -48,7 +80,6 @@ export const HQDetailModal: React.FC<HQDetailModalProps> = ({
                 className="w-full h-full object-contain"
               />
 
-              {/* Prev / Next buttons if multiple photos */}
               {images.length > 1 && (
                 <>
                   <button
@@ -68,13 +99,11 @@ export const HQDetailModal: React.FC<HQDetailModalProps> = ({
                 </>
               )}
 
-              {/* Photo counter */}
               <div className="absolute bottom-2.5 right-2.5 bg-black/80 backdrop-blur-md text-amber-300 text-xs px-2.5 py-1 rounded-full font-bold border border-amber-500/30">
                 {activePhotoIdx + 1} de {images.length} fotos
               </div>
             </div>
 
-            {/* Thumbnails list */}
             {images.length > 1 && (
               <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-thin">
                 {images.map((img, idx) => (
@@ -93,7 +122,6 @@ export const HQDetailModal: React.FC<HQDetailModalProps> = ({
               </div>
             )}
 
-            {/* Guarantee badge under photos */}
             <div className="bg-emerald-950/40 border border-emerald-800/50 rounded-xl p-3 text-xs text-emerald-300 flex items-center gap-2.5">
               <CheckCircle className="w-5 h-5 text-emerald-400 shrink-0" />
               <div>
@@ -108,7 +136,6 @@ export const HQDetailModal: React.FC<HQDetailModalProps> = ({
           {/* Details Column */}
           <div className="md:col-span-7 flex flex-col justify-between space-y-4">
             <div>
-              {/* Badges row */}
               <div className="flex flex-wrap items-center gap-2 mb-2">
                 <span className="text-xs font-black uppercase tracking-wider bg-zinc-800 text-amber-300 px-2.5 py-1 rounded-lg border border-zinc-700">
                   {hq.publisher}
@@ -120,17 +147,15 @@ export const HQDetailModal: React.FC<HQDetailModalProps> = ({
 
                 {hq.isCollection && (
                   <span className="text-xs font-black bg-indigo-600 text-white px-2.5 py-1 rounded-lg shadow flex items-center gap-1">
-                    <Layers className="w-3.5 h-3.5" /> Lote Completo ({hq.collectionCount} revistas)
+                    <Layers className="w-3.5 h-3.5" /> Lote ({hq.collectionCount} revistas)
                   </span>
                 )}
               </div>
 
-              {/* Title */}
               <h2 className="text-xl sm:text-2xl font-black text-white font-['Space_Grotesk'] leading-tight mb-2">
                 {hq.title}
               </h2>
 
-              {/* Series and metadata */}
               <div className="grid grid-cols-2 gap-2 text-xs text-zinc-300 mb-4 bg-zinc-900/60 p-3 rounded-xl border border-zinc-800">
                 <div>
                   <span className="text-zinc-500 block text-[10px] uppercase font-semibold">Série / Título</span>
@@ -138,7 +163,7 @@ export const HQDetailModal: React.FC<HQDetailModalProps> = ({
                 </div>
                 <div>
                   <span className="text-zinc-500 block text-[10px] uppercase font-semibold">Edição / Número</span>
-                  <span className="font-medium text-white">#{hq.issueNumber}</span>
+                  <span className="font-medium text-white">{hq.issueNumber.startsWith('#') ? hq.issueNumber : `#${hq.issueNumber}`}</span>
                 </div>
                 <div>
                   <span className="text-zinc-500 block text-[10px] uppercase font-semibold">Ano de Lançamento</span>
@@ -152,23 +177,112 @@ export const HQDetailModal: React.FC<HQDetailModalProps> = ({
 
               {/* Unit vs Collection Option Selector */}
               {hq.isCollection && (
-                <div className="p-3 bg-amber-500/10 rounded-2xl border border-amber-500/30 text-xs space-y-2 mb-3">
-                  <span className="font-bold text-amber-300 block">Opções de Compra Disponíveis:</span>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    <div className="p-2.5 rounded-xl bg-zinc-950/80 border border-amber-500/40">
-                      <span className="text-[10px] uppercase font-black text-amber-400 block">Lote Completo c/ Desconto</span>
-                      <strong className="text-white text-sm">{formatBRL(hq.bundlePrice || hq.price)}</strong>
-                      <span className="text-[10px] text-zinc-400 block mt-0.5">Leve a coleção inteira ({hq.collectionCount} revistas)</span>
-                    </div>
+                <div className="p-3.5 bg-amber-500/10 rounded-2xl border border-amber-500/30 text-xs space-y-3 mb-4">
+                  <span className="font-bold text-amber-300 block">
+                    Escolha como deseja comprar:
+                  </span>
 
-                    {hq.allowsUnitPurchase && hq.unitPrice && (
-                      <div className="p-2.5 rounded-xl bg-zinc-950/60 border border-zinc-800">
-                        <span className="text-[10px] uppercase font-bold text-zinc-400 block">Exemplar Avulso</span>
-                        <strong className="text-white text-sm">{formatBRL(hq.unitPrice)}</strong>
-                        <span className="text-[10px] text-zinc-400 block mt-0.5">Valor por unidade avulsa</span>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    <button
+                      type="button"
+                      onClick={() => setPurchaseMode('lot')}
+                      className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
+                        purchaseMode === 'lot'
+                          ? 'bg-zinc-950 border-amber-400 ring-2 ring-amber-500/30 shadow-md'
+                          : 'bg-zinc-950/60 border-zinc-800 hover:border-zinc-600 opacity-80'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between mb-0.5">
+                        <span className="text-[10px] uppercase font-black text-amber-400">
+                          Lote Completo c/ Desconto
+                        </span>
+                        {purchaseMode === 'lot' && <Check className="w-3.5 h-3.5 text-amber-400" />}
                       </div>
+                      <strong className="text-white text-sm block">{formatBRL(lotDisplayPrice)}</strong>
+                      <span className="text-[10px] text-zinc-400 block mt-0.5">
+                        Leve o pacote inteiro ({hq.collectionCount} revistas)
+                      </span>
+                    </button>
+
+                    {canSelectAvulso && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPurchaseMode('unit');
+                          if (selectedIssues.length === 0 && availableIssues.length > 0) {
+                            setSelectedIssues([availableIssues[0]]);
+                          }
+                        }}
+                        className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
+                          purchaseMode === 'unit'
+                            ? 'bg-zinc-950 border-emerald-400 ring-2 ring-emerald-500/30 shadow-md'
+                            : 'bg-zinc-950/60 border-zinc-800 hover:border-zinc-600'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between mb-0.5">
+                          <span className="text-[10px] uppercase font-black text-emerald-400">
+                            Exemplar Avulso (1 por 1)
+                          </span>
+                          {purchaseMode === 'unit' && <Check className="w-3.5 h-3.5 text-emerald-400" />}
+                        </div>
+                        <strong className="text-white text-sm block">{formatBRL(unitDisplayPrice)}</strong>
+                        <span className="text-[10px] text-zinc-400 block mt-0.5">
+                          Escolha as edições que deseja ({availableIssues.length} disponíveis)
+                        </span>
+                      </button>
                     )}
                   </div>
+
+                  {/* Interactive 1-by-1 issue picker when Exemplar Avulso is active */}
+                  {canSelectAvulso && purchaseMode === 'unit' && (
+                    <div className="bg-zinc-950/90 border border-emerald-700/40 rounded-xl p-3 space-y-2.5 animate-in fade-in duration-150">
+                      <div className="flex items-center justify-between text-[11px]">
+                        <span className="font-bold text-emerald-300">
+                          Selecione as edições avulsas desejadas:
+                        </span>
+                        <span className="text-zinc-400">
+                          {selectedIssues.length} selecionada(s)
+                        </span>
+                      </div>
+
+                      {availableIssues.length === 0 ? (
+                        <p className="text-[11px] text-rose-400">
+                          Todas as edições avulsas deste lote já foram vendidas.
+                        </p>
+                      ) : (
+                        <div className="flex flex-wrap gap-1.5 max-h-36 overflow-y-auto pr-1">
+                          {availableIssues.map((issue) => {
+                            const selected = selectedIssues.includes(issue);
+                            return (
+                              <button
+                                key={issue}
+                                type="button"
+                                onClick={() => toggleIssue(issue)}
+                                className={`px-2.5 py-1.5 rounded-lg text-xs font-bold border transition-all cursor-pointer ${
+                                  selected
+                                    ? 'bg-emerald-500 text-black border-emerald-400 shadow'
+                                    : 'bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border-zinc-700'
+                                }`}
+                              >
+                                {issue}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+
+                      {selectedIssues.length > 0 && (
+                        <div className="flex items-center justify-between pt-2 border-t border-zinc-800 text-[11px]">
+                          <span className="text-zinc-400">
+                            Edições: <strong className="text-zinc-200">{selectedIssues.join(', ')}</strong>
+                          </span>
+                          <span className="font-bold text-emerald-400">
+                            {formatBRL(effectiveCheckoutPrice)}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -219,26 +333,42 @@ export const HQDetailModal: React.FC<HQDetailModalProps> = ({
             <div className="pt-4 border-t border-zinc-800 flex items-center justify-between gap-4">
               <div>
                 <span className="text-xs text-zinc-400 block font-medium">
-                  {hq.isCollection ? 'Preço do Lote Promocional' : 'Preço'}
+                  {purchaseMode === 'unit' && canSelectAvulso
+                    ? `${selectedIssues.length} Exemplar(es) Avulso(s)`
+                    : hq.isCollection
+                    ? 'Preço do Lote Promocional'
+                    : 'Preço'}
                 </span>
                 <span className="text-2xl font-black text-amber-400 font-['Space_Grotesk']">
-                  {formatBRL(hq.price)}
+                  {formatBRL(effectiveCheckoutPrice)}
                 </span>
               </div>
 
               <button
+                type="button"
+                disabled={!canConfirmPurchase}
                 onClick={() => {
-                  onAddToCart(hq);
+                  onAddToCart(hq, purchaseMode === 'unit' && canSelectAvulso ? selectedIssues : undefined);
                   onClose();
                 }}
                 className={`flex items-center gap-2 font-bold px-6 py-3 rounded-xl transition-all active:scale-95 shadow-lg ${
-                  isInCart
+                  !canConfirmPurchase
+                    ? 'bg-zinc-800 text-zinc-500 cursor-not-allowed'
+                    : isInCart && purchaseMode === 'lot'
                     ? 'bg-emerald-600 text-white'
                     : 'bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-black'
                 }`}
               >
                 <ShoppingBag className="w-4 h-4" />
-                <span>{isInCart ? 'No Carrinho (Ver Carrinho)' : 'Adicionar ao Carrinho'}</span>
+                <span>
+                  {!canConfirmPurchase
+                    ? 'Selecione ao menos 1 edição'
+                    : purchaseMode === 'unit' && canSelectAvulso
+                    ? `Adicionar ${selectedIssues.length} Avulso(s)`
+                    : isInCart
+                    ? 'No Carrinho (Ver Carrinho)'
+                    : 'Adicionar ao Carrinho'}
+                </span>
               </button>
             </div>
           </div>

@@ -28,7 +28,7 @@ interface CartDrawerProps {
   isOpen: boolean;
   onClose: () => void;
   cart: CartItem[];
-  onRemoveItem: (hqId: string) => void;
+  onRemoveItem: (hqId: string, selectedIssue?: string) => void;
   onClearCart: () => void;
   onOpenNegotiation: () => void;
   onOrderCreated: (order: Order) => void;
@@ -226,6 +226,8 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
         sellerId: c.hq.sellerId,
         sellerName: c.hq.sellerName,
         image: c.hq.images[0] || '',
+        selectedIssue: c.selectedIssue,
+        parentLotId: c.parentLotId,
       })),
       shippingMethod: (selectedShipping?.code as any) || 'PAC',
       shippingCost,
@@ -383,7 +385,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                     <div className="space-y-2.5">
                       {cart.map((item) => (
                         <div
-                          key={item.hq.id}
+                          key={`${item.hq.id}-${item.selectedIssue || 'full'}`}
                           className="bg-zinc-900/80 border border-zinc-800 rounded-xl p-3 flex gap-3 items-center justify-between"
                         >
                           <div className="flex items-center gap-3 min-w-0">
@@ -397,7 +399,9 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                                 {item.hq.title}
                               </h4>
                               <span className="text-[11px] text-zinc-400 block">
-                                Ed. #{item.hq.issueNumber} • {item.hq.publisher} ({item.hq.year})
+                                {item.selectedIssue
+                                  ? `Exemplar Avulso (${item.selectedIssue}) • ${item.hq.publisher}`
+                                  : `Ed. #${item.hq.issueNumber} • ${item.hq.publisher} (${item.hq.year})`}
                               </span>
                               <span className="text-[10px] text-amber-400/90 block">
                                 Vendedor: {item.hq.sellerName}
@@ -409,7 +413,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                           </div>
 
                           <button
-                            onClick={() => onRemoveItem(item.hq.id)}
+                            onClick={() => onRemoveItem(item.hq.id, item.selectedIssue)}
                             className="text-zinc-500 hover:text-rose-400 p-1.5 rounded-lg transition-colors shrink-0"
                             title="Remover do carrinho"
                           >

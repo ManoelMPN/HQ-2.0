@@ -35,7 +35,7 @@ import {
   Zap,
 } from 'lucide-react';
 import { HQItem, Seller, ConditionGrade, DiscountProposal, Order } from '../types.ts';
-import { formatBRL, getConditionInfo, normalizeFranchiseName } from '../utils/comicLogic.ts';
+import { formatBRL, getConditionInfo, normalizeFranchiseName, parseIssueNumbersFromRange } from '../utils/comicLogic.ts';
 import {
   SUPABASE_SQL_SCHEMA,
   getSupabaseCredentials,
@@ -50,6 +50,7 @@ interface AdminPageProps {
   onBackToStore: () => void;
   hqs: HQItem[];
   onAddHQ: (hq: Omit<HQItem, 'id' | 'createdAt'>) => void;
+  onAddHQsBatch?: (hqs: Omit<HQItem, 'id' | 'createdAt'>[]) => void;
   onUpdateHQ: (hq: HQItem) => void;
   onDeleteHQ: (id: string) => void;
   onResetToDemoHQs: () => void;
@@ -86,6 +87,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({
   onBackToStore,
   hqs,
   onAddHQ,
+  onAddHQsBatch,
   onUpdateHQ,
   onDeleteHQ,
   onClearDemoHQs,
@@ -138,6 +140,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({
   const [formConditionDetails, setFormConditionDetails] = useState('');
   const [formIsCollection, setFormIsCollection] = useState(false);
   const [formCollectionCount, setFormCollectionCount] = useState<number>(1);
+  const [saleMode, setSaleMode] = useState<'single' | 'lot_only' | 'lot_and_units'>('single');
   const [formIs1Real, setFormIs1Real] = useState(false);
   const [formMaxDiscountPercent, setFormMaxDiscountPercent] = useState<string>('');
   const [editingHQId, setEditingHQId] = useState<string | null>(null);
@@ -347,9 +350,17 @@ export const AdminPage: React.FC<AdminPageProps> = ({
 
         if (d.unitPrice) setFormUnitPrice(Number(d.unitPrice));
         if (d.bundlePrice) setFormBundlePrice(Number(d.bundlePrice));
-        if (d.isCollection !== undefined) setFormIsCollection(Boolean(d.isCollection));
         if (d.collectionCount) setFormCollectionCount(Number(d.collectionCount));
-        if (d.allowsUnitPurchase !== undefined) setFormAllowsUnitPurchase(Boolean(d.allowsUnitPurchase));
+        if (d.isCollection) {
+          const allowsUnits = d.allowsUnitPurchase !== false;
+          setFormIsCollection(true);
+          setFormAllowsUnitPurchase(allowsUnits);
+          setSaleMode(allowsUnits ? 'lot_and_units' : 'lot_only');
+        } else {
+          setFormIsCollection(false);
+          setFormAllowsUnitPurchase(false);
+          setSaleMode('single');
+        }
 
         if (d.conditionGradeSuggestion) {
           setFormCondition(d.conditionGradeSuggestion as ConditionGrade);
@@ -606,6 +617,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({
     setFormAllowsUnitPurchase(false);
     setFormIsCollection(false);
     setFormCollectionCount(1);
+    setSaleMode('single');
     setFormIs1Real(false);
     setFormMaxDiscountPercent('');
     setAiAnalysisFeedback(null);
@@ -619,6 +631,9 @@ export const AdminPage: React.FC<AdminPageProps> = ({
       return;
     }
 
+    const editIsCollection = Boolean(hq.isCollection);
+    const editAllowsUnits = Boolean(hq.allowsUnitPurchase);
+
     setEditingHQId(hq.id);
     setFormImages(hq.images || []);
     setFormTitle(hq.title);
@@ -631,11 +646,12 @@ export const AdminPage: React.FC<AdminPageProps> = ({
     setFormPrice(hq.price || 0);
     setFormUnitPrice(hq.unitPrice ?? hq.price ?? 0);
     setFormBundlePrice(hq.bundlePrice ?? hq.price ?? 0);
-    setFormAllowsUnitPurchase(Boolean(hq.allowsUnitPurchase));
+    setFormAllowsUnitPurchase(editAllowsUnits);
     setFormCondition(hq.condition || 'bom');
     setFormConditionDetails(hq.conditionDetails || '');
-    setFormIsCollection(Boolean(hq.isCollection));
+    setFormIsCollection(editIsCollection);
     setFormCollectionCount(hq.collectionCount || 1);
+    setSaleMode(editIsCollection ? (editAllowsUnits ? 'lot_and_units' : 'lot_only') : 'single');
     setFormIs1Real(Boolean(hq.isRareSpecial1Real));
     setFormMaxDiscountPercent(
       hq.maxDiscountPercent !== undefined && hq.maxDiscountPercent !== null ? String(hq.maxDiscountPercent) : ''
@@ -706,33 +722,85 @@ export const AdminPage: React.FC<AdminPageProps> = ({
     const targetSellerId = currentSeller?.role === 'master' ? formSellerId : currentSeller?.id || 'master';
     const currentPublisher = sellers.find((s) => s.id === targetSellerId) || currentSeller;
 
-    onAddHQ({
-      title: formTitle,
+    const basePayload = {
       description: formDescription || 'Exemplar com miolo completo, páginas íntegras e preservadas para leitura.',
       publisher: formPublisher,
       series: formSeries,
       franchiseCategory: formFranchise || 'Quadrinhos',
-      issueNumber: formIssueNumber || '01',
       year: formYear,
       condition: formCondition,
       conditionDetails: formConditionDetails,
       hasAllPages: true,
       cleaningNote: 'Higienizada e inspecionada',
-      price: formIsCollection ? formBundlePrice : formPrice,
-      unitPrice: formUnitPrice,
-      bundlePrice: formBundlePrice,
-      allowsUnitPurchase: formAllowsUnitPurchase,
       maxDiscountPercent: parsedMaxDiscount,
       isRareSpecial1Real: formIs1Real,
-      isCollection: formIsCollection,
-      collectionCount: formIsCollection ? formCollectionCount : 1,
-      images: formImages,
       sellerId: targetSellerId,
       sellerName: currentPublisher?.storeName || currentPublisher?.name || 'HQ Master',
       sellerAddress: '',
       sellerCep: '',
       featured: true,
       sold: false,
+    };
+
+    if (saleMode === 'lot_and_units') {
+      const targetCount = Math.max(2, Number(formCollectionCount) || 2);
+      const issuesList = parseIssueNumbersFromRange(formIssueNumber, targetCount);
+      const lotGroupId = `lot-${Date.now()}`;
+
+      const lotItem: Omit<HQItem, 'id' | 'createdAt'> = {
+        ...basePayload,
+        title: formTitle,
+        issueNumber: formIssueNumber || `${issuesList[0]} ao ${issuesList[issuesList.length - 1]}`,
+        price: formBundlePrice,
+        unitPrice: formUnitPrice,
+        bundlePrice: formBundlePrice,
+        allowsUnitPurchase: true,
+        isCollection: true,
+        collectionCount: issuesList.length,
+        lotGroupId,
+        soldIssues: [],
+        images: formImages,
+      };
+
+      const unitItems: Omit<HQItem, 'id' | 'createdAt'>[] = issuesList.map((issue, idx) => ({
+        ...basePayload,
+        title: `${formTitle} — Avulso ${issue}`,
+        issueNumber: issue,
+        price: formUnitPrice,
+        unitPrice: formUnitPrice,
+        bundlePrice: formBundlePrice,
+        allowsUnitPurchase: false,
+        isCollection: false,
+        collectionCount: 1,
+        lotGroupId,
+        images: formImages[idx] ? [formImages[idx]] : formImages,
+        featured: false,
+      }));
+
+      const batch = [lotItem, ...unitItems];
+      if (onAddHQsBatch) {
+        onAddHQsBatch(batch);
+      } else {
+        batch.forEach((item) => onAddHQ(item));
+      }
+
+      resetHQForm();
+      alert(`Publicado com sucesso: 1 anúncio para o Lote + ${unitItems.length} anúncios avulsos (1 por 1) vinculados ao estoque!`);
+      setActiveTab('catalog');
+      return;
+    }
+
+    onAddHQ({
+      ...basePayload,
+      title: formTitle,
+      issueNumber: formIssueNumber || '01',
+      price: saleMode === 'lot_only' ? formBundlePrice : formPrice,
+      unitPrice: formUnitPrice,
+      bundlePrice: formBundlePrice,
+      allowsUnitPurchase: false,
+      isCollection: saleMode === 'lot_only',
+      collectionCount: saleMode === 'lot_only' ? Math.max(2, formCollectionCount || 2) : 1,
+      images: formImages,
     });
 
     resetHQForm();
@@ -1498,92 +1566,151 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                     </select>
                   </div>
 
-                  {/* Lot & Pricing Options */}
+                  {/* Sale Mode & Pricing Options */}
                   <div className="sm:col-span-2 bg-zinc-950/70 p-4 rounded-2xl border border-zinc-800 space-y-3">
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="checkbox"
-                        id="isCollectionCheck"
-                        checked={formIsCollection}
-                        onChange={(e) => setFormIsCollection(e.target.checked)}
-                        className="accent-amber-500 w-4 h-4 rounded"
-                      />
-                      <label htmlFor="isCollectionCheck" className="text-xs font-bold text-white cursor-pointer">
-                        Este anúncio é uma Coleção / Lote com múltiplas edições
+                    <div>
+                      <label className="block text-xs font-bold text-white mb-2">
+                        Formato de Anúncio & Venda
                       </label>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSaleMode('single');
+                            setFormIsCollection(false);
+                            setFormAllowsUnitPurchase(false);
+                          }}
+                          className={`p-3 rounded-xl border text-left text-xs transition-all cursor-pointer ${
+                            saleMode === 'single'
+                              ? 'bg-amber-500/15 border-amber-400 text-white shadow'
+                              : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-zinc-200'
+                          }`}
+                        >
+                          <strong className="block text-amber-300">Unidade Avulsa</strong>
+                          <span className="text-[11px] text-zinc-400">Anunciar 1 edição individual</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSaleMode('lot_only');
+                            setFormIsCollection(true);
+                            setFormAllowsUnitPurchase(false);
+                            if (formCollectionCount < 2) setFormCollectionCount(Math.max(2, formImages.length || 2));
+                          }}
+                          className={`p-3 rounded-xl border text-left text-xs transition-all cursor-pointer ${
+                            saleMode === 'lot_only'
+                              ? 'bg-amber-500/15 border-amber-400 text-white shadow'
+                              : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-zinc-200'
+                          }`}
+                        >
+                          <strong className="block text-amber-300">Vender Apenas no Lote</strong>
+                          <span className="text-[11px] text-zinc-400">Coleção fechada (sem avulso)</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSaleMode('lot_and_units');
+                            setFormIsCollection(true);
+                            setFormAllowsUnitPurchase(true);
+                            if (formCollectionCount < 2) setFormCollectionCount(Math.max(2, formImages.length || 2));
+                          }}
+                          className={`p-3 rounded-xl border text-left text-xs transition-all cursor-pointer ${
+                            saleMode === 'lot_and_units'
+                              ? 'bg-emerald-500/15 border-emerald-400 text-white shadow'
+                              : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-zinc-200'
+                          }`}
+                        >
+                          <strong className="block text-emerald-300">Lote + Avulsos (1 por 1)</strong>
+                          <span className="text-[11px] text-zinc-400">Gera 1 anúncio do lote e 1 de cada edição</span>
+                        </button>
+                      </div>
                     </div>
 
-                    {formIsCollection ? (
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2">
-                        <div>
-                          <label className="block text-[11px] text-zinc-400 mb-1">
-                            Qtd de Edições no Lote
-                          </label>
-                          <input
-                            type="number"
-                            min={2}
-                            value={formCollectionCount}
-                            onChange={(e) => setFormCollectionCount(Number(e.target.value))}
-                            className="w-full bg-zinc-900 border border-zinc-700 rounded-xl px-3 py-1.5 text-xs text-white"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-[11px] text-zinc-400 mb-1">
-                            Preço do Lote Fechado (com Desconto) *
-                          </label>
-                          <input
-                            type="number"
-                            step="0.5"
-                            value={formBundlePrice}
-                            onChange={(e) => {
-                              const val = Number(e.target.value);
-                              setFormBundlePrice(val);
-                              setFormPrice(val);
-                            }}
-                            className="w-full bg-zinc-900 border border-zinc-700 rounded-xl px-3 py-1.5 text-xs text-amber-400 font-bold"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-[11px] text-zinc-400 mb-1">
-                            Preço por Edição Avulsa
-                          </label>
-                          <input
-                            type="number"
-                            step="0.5"
-                            value={formUnitPrice}
-                            onChange={(e) => setFormUnitPrice(Number(e.target.value))}
-                            className="w-full bg-zinc-900 border border-zinc-700 rounded-xl px-3 py-1.5 text-xs text-zinc-200"
-                          />
+                    {saleMode !== 'single' ? (
+                      <div className="space-y-3 pt-2">
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                          <div>
+                            <label className="block text-[11px] text-zinc-400 mb-1">
+                              Qtd de Edições no Lote
+                            </label>
+                            <input
+                              type="number"
+                              min={2}
+                              value={formCollectionCount}
+                              onChange={(e) => setFormCollectionCount(Math.max(2, Number(e.target.value)))}
+                              className="w-full bg-zinc-900 border border-zinc-700 rounded-xl px-3 py-1.5 text-xs text-white"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[11px] text-zinc-400 mb-1">
+                              Preço do Lote Fechado (R$) *
+                            </label>
+                            <input
+                              type="number"
+                              step="0.5"
+                              value={formBundlePrice}
+                              onChange={(e) => {
+                                const val = Number(e.target.value);
+                                setFormBundlePrice(val);
+                                setFormPrice(val);
+                              }}
+                              className="w-full bg-zinc-900 border border-zinc-700 rounded-xl px-3 py-1.5 text-xs text-amber-400 font-bold"
+                            />
+                          </div>
+                          {saleMode === 'lot_and_units' && (
+                            <div>
+                              <label className="block text-[11px] text-zinc-400 mb-1">
+                                Preço por Unidade Avulsa (R$) *
+                              </label>
+                              <input
+                                type="number"
+                                step="0.5"
+                                value={formUnitPrice}
+                                onChange={(e) => setFormUnitPrice(Number(e.target.value))}
+                                className="w-full bg-zinc-900 border border-zinc-700 rounded-xl px-3 py-1.5 text-xs text-emerald-400 font-bold"
+                              />
+                            </div>
+                          )}
                         </div>
 
-                        <div className="sm:col-span-3 flex items-center gap-2 pt-1">
-                          <input
-                            type="checkbox"
-                            id="allowsUnitCheck"
-                            checked={formAllowsUnitPurchase}
-                            onChange={(e) => setFormAllowsUnitPurchase(e.target.checked)}
-                            className="accent-amber-500 w-3.5 h-3.5"
-                          />
-                          <label htmlFor="allowsUnitCheck" className="text-xs text-zinc-300">
-                            Permitir que o cliente compre exemplares avulsos além do pacote fechado
-                          </label>
-                        </div>
+                        {saleMode === 'lot_and_units' && !editingHQId && (() => {
+                          const previewIssues = parseIssueNumbersFromRange(formIssueNumber, Math.max(2, formCollectionCount || 2));
+                          return (
+                            <div className="bg-emerald-950/30 border border-emerald-800/50 rounded-xl p-3 text-[11px] text-emerald-200 space-y-1.5">
+                              <div className="font-bold text-emerald-300">
+                                Publicação Sincronizada: 1 Lote + {previewIssues.length} Anúncios Avulsos
+                              </div>
+                              <p className="text-zinc-300">
+                                Ao publicar, serão gerados automaticamente o anúncio do Lote Completo ({formatBRL(formBundlePrice)}) e um anúncio individual para cada unidade ({formatBRL(formUnitPrice)} cada). Se uma avulsa for comprada, ela sai do estoque automaticamente:
+                              </p>
+                              <div className="flex flex-wrap gap-1 pt-1">
+                                {previewIssues.map((iss) => (
+                                  <span key={iss} className="bg-zinc-900 border border-zinc-700 px-2 py-0.5 rounded text-[10px] font-mono text-amber-300">
+                                    {iss}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          );
+                        })()}
                       </div>
                     ) : (
-                        <div className="max-w-xs">
-                          <label className="block text-[11px] text-zinc-400 mb-1">
-                            Preço da Revista (R$) *
-                          </label>
-                          <input
-                            type="number"
-                            step="0.5"
-                            value={formPrice}
-                            onChange={(e) => setFormPrice(Number(e.target.value))}
-                            className="w-full bg-zinc-900 border border-zinc-700 rounded-xl px-3 py-2 text-xs text-amber-400 font-bold"
-                            required
-                          />
-                        </div>
-                      )}
+                      <div className="max-w-xs pt-2">
+                        <label className="block text-[11px] text-zinc-400 mb-1">
+                          Preço da Revista (R$) *
+                        </label>
+                        <input
+                          type="number"
+                          step="0.5"
+                          value={formPrice}
+                          onChange={(e) => setFormPrice(Number(e.target.value))}
+                          className="w-full bg-zinc-900 border border-zinc-700 rounded-xl px-3 py-2 text-xs text-amber-400 font-bold"
+                          required
+                        />
+                      </div>
+                    )}
 
                     {/* Per-unit / Per-lot Auto-Accept Max Discount */}
                     <div className="pt-3 border-t border-zinc-800/80 grid grid-cols-1 sm:grid-cols-2 gap-3 items-center">
@@ -1679,14 +1806,21 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                       return (
                         <div
                           key={hq.id}
-                          className="bg-[#111520] border border-zinc-800 rounded-2xl p-3.5 space-y-3 flex flex-col justify-between"
+                          className={`bg-[#111520] border border-zinc-800 rounded-2xl p-3.5 space-y-3 flex flex-col justify-between ${hq.sold ? 'opacity-60' : ''}`}
                         >
                           <div className="space-y-2">
-                            <img
-                              src={hq.images[0] || 'https://images.unsplash.com/photo-1601645191163-3fc0d5d34e35?auto=format&fit=crop&w=400&q=80'}
-                              alt={hq.title}
-                              className="w-full h-44 object-cover rounded-xl bg-zinc-950 border border-zinc-800"
-                            />
+                            <div className="relative">
+                              <img
+                                src={hq.images[0] || 'https://images.unsplash.com/photo-1601645191163-3fc0d5d34e35?auto=format&fit=crop&w=400&q=80'}
+                                alt={hq.title}
+                                className="w-full h-44 object-cover rounded-xl bg-zinc-950 border border-zinc-800"
+                              />
+                              {hq.sold && (
+                                <span className="absolute top-2 left-2 bg-rose-600 text-white text-[10px] font-black uppercase px-2 py-0.5 rounded shadow">
+                                  Vendido / Sem Estoque
+                                </span>
+                              )}
+                            </div>
                             <div>
                               <h4 className="text-xs font-bold text-white truncate">{hq.title}</h4>
                               <span className="text-[11px] text-zinc-400 block">{hq.publisher} • {hq.year}</span>

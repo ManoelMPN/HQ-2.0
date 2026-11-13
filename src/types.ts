@@ -21,6 +21,8 @@ export interface HQItem {
   isRareSpecial1Real?: boolean;
   isCollection: boolean; // Single issue or entire collection/lot
   collectionCount?: number;
+  lotGroupId?: string;
+  soldIssues?: string[];
   images: string[];
   sellerId: string;
   sellerName: string;
@@ -62,6 +64,8 @@ export interface Seller {
 export interface CartItem {
   hq: HQItem;
   quantity: number;
+  selectedIssue?: string;
+  parentLotId?: string;
 }
 
 export interface DiscountProposal {
@@ -105,6 +109,8 @@ export interface Order {
     sellerId: string;
     sellerName: string;
     image: string;
+    selectedIssue?: string;
+    parentLotId?: string;
   }[];
   shippingMethod: 'PAC' | 'SEDEX' | 'Retirada';
   shippingCost: number;

@@ -108,6 +108,9 @@ export function groupHQsByFranchise(hqs: HQItem[]) {
 
 export function filterHQs(hqs: HQItem[], filters: FilterState): HQItem[] {
   return hqs.filter((hq) => {
+    // Automatically hide sold items from storefront stock
+    if (hq.sold) return false;
+
     // Text search (title, series, franchise, description, issue number)
     if (filters.search) {
       const q = filters.search.toLowerCase().trim();
@@ -284,6 +287,45 @@ export function evaluateOfferAgainstPolicy(
     return 'auto_approve';
   }
   return 'requires_seller_review';
+}
+
+export function parseIssueNumbersFromRange(issueInput: string, count: number): string[] {
+  const safeCount = Math.max(1, Math.min(200, Math.round(count || 1)));
+  const clean = (issueInput || '').trim();
+
+  // Handle comma-separated explicit issues (e.g. "#01, #03, #07")
+  if (clean.includes(',')) {
+    const parts = clean
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .map((s) => (s.startsWith('#') ? s : `#${s}`));
+    if (parts.length > 0) return parts;
+  }
+
+  // Handle numeric range like "#01 ao #29", "1-15", "01 a 10"
+  const rangeMatch = clean.match(/#?(\d+)\s*(?:ao|a|-|até|to)\s*#?(\d+)/i);
+  if (rangeMatch) {
+    const start = parseInt(rangeMatch[1], 10);
+    const end = parseInt(rangeMatch[2], 10);
+    if (Number.isFinite(start) && Number.isFinite(end) && end >= start && end - start <= 200) {
+      const padLen = Math.max(2, rangeMatch[1].length);
+      const list: string[] = [];
+      for (let n = start; n <= end; n++) {
+        list.push(`#${String(n).padStart(padLen, '0')}`);
+      }
+      return list;
+    }
+  }
+
+  // Fallback: generate sequential #01 .. #N
+  const startMatch = clean.match(/(\d+)/);
+  const startNum = startMatch ? parseInt(startMatch[1], 10) : 1;
+  const list: string[] = [];
+  for (let i = 0; i < safeCount; i++) {
+    list.push(`#${String(startNum + i).padStart(2, '0')}`);
+  }
+  return list;
 }
 
 export interface PostalFreightOption {

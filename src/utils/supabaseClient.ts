@@ -179,6 +179,8 @@ function mapHQToRow(hq: HQItem, includeExtended = true) {
       bundle_price: hq.bundlePrice ?? hq.price,
       allows_unit_purchase: Boolean(hq.allowsUnitPurchase),
       max_discount_percent: hq.maxDiscountPercent !== undefined && hq.maxDiscountPercent !== null ? Number(hq.maxDiscountPercent) : null,
+      lot_group_id: hq.lotGroupId || null,
+      sold_issues: Array.isArray(hq.soldIssues) ? hq.soldIssues : [],
     });
   }
 
@@ -207,6 +209,8 @@ function mapRowToHQ(row: any): HQItem {
     isRareSpecial1Real: Boolean(row.is_rare_special_1real),
     isCollection: Boolean(row.is_collection),
     collectionCount: Number(row.collection_count || 1),
+    lotGroupId: row.lot_group_id || undefined,
+    soldIssues: Array.isArray(row.sold_issues) ? row.sold_issues : [],
     images: Array.isArray(row.images) ? row.images : [],
     sellerId: row.seller_id || 'master',
     sellerName: row.seller_name || 'HQ Master',
@@ -700,6 +704,8 @@ ALTER TABLE public.hqs ADD COLUMN IF NOT EXISTS unit_price NUMERIC(10,2);
 ALTER TABLE public.hqs ADD COLUMN IF NOT EXISTS bundle_price NUMERIC(10,2);
 ALTER TABLE public.hqs ADD COLUMN IF NOT EXISTS allows_unit_purchase BOOLEAN DEFAULT false;
 ALTER TABLE public.hqs ADD COLUMN IF NOT EXISTS max_discount_percent NUMERIC(5,2);
+ALTER TABLE public.hqs ADD COLUMN IF NOT EXISTS lot_group_id TEXT;
+ALTER TABLE public.hqs ADD COLUMN IF NOT EXISTS sold_issues JSONB DEFAULT '[]'::jsonb;
 
 ALTER TABLE public.discount_proposals ADD COLUMN IF NOT EXISTS auto_approved BOOLEAN DEFAULT false;
 ALTER TABLE public.discount_proposals ADD COLUMN IF NOT EXISTS discount_amount NUMERIC(10,2);

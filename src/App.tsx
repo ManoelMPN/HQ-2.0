@@ -336,26 +336,57 @@ export default function App() {
     }
   }, [proposals, hqs]);
 
-  // Derived data for dynamic filters
-  const availablePublishers = Array.from(new Set(hqs.map((h) => h.publisher))).sort();
-  const availableFranchises = Array.from(new Set(hqs.map((h) => h.franchiseCategory))).sort();
+  // Derived data for dynamic filters (exclude sold out HQs)
+  const activeHQs = hqs.filter((h) => !h.sold);
+  const availablePublishers = Array.from(new Set(activeHQs.map((h) => h.publisher))).sort();
+  const availableFranchises = Array.from(new Set(activeHQs.map((h) => h.franchiseCategory))).sort();
 
   // Filtered HQs
   const filteredHQs = filterHQs(hqs, filters);
-  const featuredHQs = hqs.filter((h) => h.featured);
+  const featuredHQs = activeHQs.filter((h) => h.featured);
 
   // Cart actions
-  const handleAddToCart = (hq: HQItem) => {
+  const handleAddToCart = (hq: HQItem, selectedIssues?: string[]) => {
     setCart((prev) => {
-      const existing = prev.find((item) => item.hq.id === hq.id);
+      if (selectedIssues && selectedIssues.length > 0) {
+        const next = [...prev];
+        selectedIssues.forEach((issue) => {
+          const alreadyExists = next.some(
+            (item) => item.hq.id === hq.id && (item.selectedIssue || '') === issue
+          );
+          if (!alreadyExists) {
+            const unitPrice = hq.unitPrice || hq.price;
+            next.push({
+              hq: {
+                ...hq,
+                title: `${hq.title} — Avulso ${issue}`,
+                issueNumber: issue,
+                price: unitPrice,
+                isCollection: false,
+                collectionCount: 1,
+              },
+              quantity: 1,
+              selectedIssue: issue,
+              parentLotId: hq.id,
+            });
+          }
+        });
+        return next;
+      }
+
+      const existing = prev.find((item) => item.hq.id === hq.id && !item.selectedIssue);
       if (existing) return prev;
       return [...prev, { hq, quantity: 1 }];
     });
     setIsCartOpen(true);
   };
 
-  const handleRemoveFromCart = (hqId: string) => {
-    setCart((prev) => prev.filter((item) => item.hq.id !== hqId));
+  const handleRemoveFromCart = (hqId: string, selectedIssue?: string) => {
+    setCart((prev) =>
+      prev.filter(
+        (item) => !(item.hq.id === hqId && (item.selectedIssue || '') === (selectedIssue || ''))
+      )
+    );
   };
 
   const handleClearCart = () => {
@@ -375,6 +406,21 @@ export default function App() {
       if (res.ok && res.hq) {
         setHqs((prev) => prev.map((item) => (item.id === newHQ.id ? res.hq : item)));
       }
+    });
+  };
+
+  const handleAddBatchHQs = (newHQsData: Omit<HQItem, 'id' | 'createdAt'>[]) => {
+    const baseTs = Date.now();
+    const createdBatch: HQItem[] = newHQsData.map((data, idx) => ({
+      ...data,
+      id: `hq-${baseTs}-${idx}`,
+      createdAt: new Date(baseTs + idx).toISOString(),
+    }));
+
+    setHqs((prev) => [...createdBatch, ...prev]);
+
+    createdBatch.forEach((createdItem) => {
+      void upsertHQToSupabase(createdItem);
     });
   };
 
@@ -638,6 +684,101 @@ export default function App() {
         return updated;
       })
     );
+
+    // Deduct purchased items (and individual avulsos / linked lot quantities) from active stock automatically
+    const boughtStandaloneIds = new Set(
+      order.items.filter((i) => !i.selectedIssue).map((i) => i.hqId)
+    );
+    const boughtLotIssuesMap: Record<string, string[]> = {};
+    order.items.forEach((i) => {
+      if (i.selectedIssue && i.parentLotId) {
+        if (!boughtLotIssuesMap[i.parentLotId]) boughtLotIssuesMap[i.parentLotId] = [];
+        boughtLotIssuesMap[i.parentLotId].push(i.selectedIssue);
+      }
+    });
+
+    setHqs((prev) => {
+      // Track lotGroupIds affected by standalone purchases
+      const soldUnitIssuesByGroup: Record<string, string[]> = {};
+      const soldFullLotGroupIds = new Set<string>();
+
+      prev.forEach((hq) => {
+        if (boughtStandaloneIds.has(hq.id) && hq.lotGroupId) {
+          if (hq.isCollection) {
+            soldFullLotGroupIds.add(hq.lotGroupId);
+          } else {
+            if (!soldUnitIssuesByGroup[hq.lotGroupId]) soldUnitIssuesByGroup[hq.lotGroupId] = [];
+            soldUnitIssuesByGroup[hq.lotGroupId].push(hq.issueNumber);
+          }
+        }
+        // Also propagate lot issue selections back to linked standalone unit HQs
+        if (boughtLotIssuesMap[hq.id] && hq.lotGroupId) {
+          if (!soldUnitIssuesByGroup[hq.lotGroupId]) soldUnitIssuesByGroup[hq.lotGroupId] = [];
+          soldUnitIssuesByGroup[hq.lotGroupId].push(...boughtLotIssuesMap[hq.id]);
+        }
+      });
+
+      const changedToPersist: HQItem[] = [];
+      const nextHqs = prev.map((hq) => {
+        let modified = false;
+        let next = hq;
+
+        // 1. Direct purchase of standalone HQ or full collection
+        if (boughtStandaloneIds.has(hq.id)) {
+          next = { ...next, sold: true };
+          modified = true;
+        }
+
+        // 2. Direct full-lot purchase sold all individual avulsos in the same lotGroupId
+        if (!hq.isCollection && hq.lotGroupId && soldFullLotGroupIds.has(hq.lotGroupId)) {
+          next = { ...next, sold: true };
+          modified = true;
+        }
+
+        // 3. Individual issue selected from parent collection -> mark linked standalone unit HQs sold
+        if (!hq.isCollection && hq.lotGroupId && soldUnitIssuesByGroup[hq.lotGroupId]?.includes(hq.issueNumber)) {
+          next = { ...next, sold: true };
+          modified = true;
+        }
+
+        // 4. Parent Lot updated when individual issues are sold (either via HQDetailModal or standalone unit HQ)
+        const issuesSoldForThisLot = [
+          ...(boughtLotIssuesMap[hq.id] || []),
+          ...(hq.isCollection && hq.lotGroupId ? soldUnitIssuesByGroup[hq.lotGroupId] || [] : []),
+        ];
+        if (hq.isCollection && issuesSoldForThisLot.length > 0 && !next.sold) {
+          const prevSold = new Set(hq.soldIssues || []);
+          const uniqueNew = Array.from(new Set(issuesSoldForThisLot)).filter((iss) => !prevSold.has(iss));
+          if (uniqueNew.length > 0) {
+            const mergedSold = [...(hq.soldIssues || []), ...uniqueNew];
+            const prevCount = Math.max(1, hq.collectionCount || 1);
+            const remainingCount = Math.max(0, prevCount - uniqueNew.length);
+            const updatedBundle =
+              remainingCount > 0 && hq.bundlePrice
+                ? Number(((hq.bundlePrice * remainingCount) / prevCount).toFixed(2))
+                : next.bundlePrice;
+            next = {
+              ...next,
+              soldIssues: mergedSold,
+              collectionCount: remainingCount,
+              bundlePrice: updatedBundle,
+              price: remainingCount > 0 && updatedBundle ? updatedBundle : next.price,
+              sold: remainingCount <= 0,
+            };
+            modified = true;
+          }
+        }
+
+        if (modified) changedToPersist.push(next);
+        return next;
+      });
+
+      changedToPersist.forEach((changed) => {
+        void upsertHQToSupabase(changed);
+      });
+
+      return nextHqs;
+    });
   };
 
   const handleUpdateOrderTracking = (orderId: string, trackingCode: string) => {
@@ -681,6 +822,7 @@ export default function App() {
         onBackToStore={() => navigateTo('store')}
         hqs={hqs}
         onAddHQ={handleAddHQ}
+        onAddHQsBatch={handleAddBatchHQs}
         onUpdateHQ={handleUpdateHQ}
         onDeleteHQ={handleDeleteHQ}
         onResetToDemoHQs={handleResetToDemoHQs}
@@ -795,11 +937,11 @@ export default function App() {
                   : 'bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border border-zinc-800'
               }`}
             >
-              Todas as Coleções ({hqs.length})
+              Todas as Coleções ({activeHQs.length})
             </button>
 
             {availableFranchises.map((franchise) => {
-              const count = hqs.filter((h) => h.franchiseCategory === franchise).length;
+              const count = activeHQs.filter((h) => h.franchiseCategory === franchise).length;
               const isSelected = filters.franchise === franchise;
 
               return (

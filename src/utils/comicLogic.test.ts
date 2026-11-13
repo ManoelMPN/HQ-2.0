@@ -11,6 +11,7 @@ import {
   calculateAutoDiscountLimit,
   evaluateOfferAgainstPolicy,
   calculateAccurateFreight,
+  parseIssueNumbersFromRange,
   MIN_ORDER_VALUE,
 } from './comicLogic.ts';
 import { HQItem, CartItem, FilterState } from '../types.ts';
@@ -243,4 +244,31 @@ test('calculateAutoDiscountLimit and evaluateOfferAgainstPolicy handle store and
   assert.equal(evaluateOfferAgainstPolicy(100, 95, limitZero.maxAutoDiscountAmount), 'requires_seller_review');
 });
 
+test('filterHQs hides sold items and parseIssueNumbersFromRange expands ranges properly', () => {
+  const withSold = [
+    ...mockHQs,
+    { ...mockHQs[0], id: 'hq-sold', sold: true },
+  ];
 
+  const defaultFilters: FilterState = {
+    search: '',
+    publisher: 'all',
+    franchise: 'all',
+    condition: 'all',
+    yearDecade: 'all',
+    type: 'all',
+    priceMax: null,
+    onlyOneReal: false,
+    sellerId: 'all',
+    sortBy: 'featured',
+  };
+
+  const visible = filterHQs(withSold, defaultFilters);
+  assert.equal(visible.length, mockHQs.length);
+  assert.ok(!visible.some((h) => h.id === 'hq-sold'));
+
+  assert.deepEqual(parseIssueNumbersFromRange('#01 ao #05', 5), ['#01', '#02', '#03', '#04', '#05']);
+  assert.deepEqual(parseIssueNumbersFromRange('1-3', 3), ['#01', '#02', '#03']);
+  assert.deepEqual(parseIssueNumbersFromRange('#02, #07, #12', 3), ['#02', '#07', '#12']);
+  assert.deepEqual(parseIssueNumbersFromRange('', 3), ['#01', '#02', '#03']);
+});
