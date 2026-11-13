@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { X, Handshake, ShieldAlert, CheckCircle, Store, Send, MapPin } from 'lucide-react';
+import { X, Handshake, ShieldAlert, CheckCircle, Store, Send, MapPin, Search } from 'lucide-react';
 import { Seller } from '../types.ts';
 
 interface PartnerOnboardingModalProps {
@@ -19,10 +19,38 @@ export const PartnerOnboardingModal: React.FC<PartnerOnboardingModalProps> = ({
   const [password, setPassword] = useState('');
   const [cep, setCep] = useState('');
   const [address, setAddress] = useState('');
+  const [lookingUpCep, setLookingUpCep] = useState(false);
+  const [cepFeedback, setCepFeedback] = useState<string | null>(null);
   const [acceptedTerms, setAcceptedTerms] = useState(false);
   const [submitted, setSubmitted] = useState(false);
 
   if (!isOpen) return null;
+
+  const handleLookupCep = async (cepValue?: string) => {
+    const raw = (cepValue || cep).replace(/\D/g, '');
+    if (raw.length !== 8) {
+      setCepFeedback('O CEP precisa ter 8 dígitos.');
+      return;
+    }
+    setLookingUpCep(true);
+    setCepFeedback(null);
+    try {
+      const res = await fetch(`https://viacep.com.br/ws/${raw}/json/`);
+      const data = await res.json();
+      if (data.erro) {
+        setCepFeedback('CEP não encontrado.');
+      } else {
+        setCep(`${raw.slice(0, 5)}-${raw.slice(5)}`);
+        const formatted = `${data.localidade}/${data.uf}`;
+        setAddress(formatted);
+        setCepFeedback(null);
+      }
+    } catch {
+      setCepFeedback('Falha ao buscar CEP. Digite a cidade/estado manualmente.');
+    } finally {
+      setLookingUpCep(false);
+    }
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -146,14 +174,33 @@ export const PartnerOnboardingModal: React.FC<PartnerOnboardingModalProps> = ({
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-zinc-300 mb-1">CEP de Origem (Para Frete)</label>
-                  <input
-                    type="text"
-                    value={cep}
-                    onChange={(e) => setCep(e.target.value)}
-                    placeholder="Ex: 01310-100"
-                    className="w-full bg-zinc-950 border border-zinc-700 rounded-xl py-2 px-3 text-xs text-zinc-200 focus:outline-none focus:border-amber-500"
-                    required
-                  />
+                  <div className="flex gap-1.5">
+                    <input
+                      type="text"
+                      maxLength={9}
+                      value={cep}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setCep(val);
+                        if (val.replace(/\D/g, '').length === 8) {
+                          void handleLookupCep(val);
+                        }
+                      }}
+                      placeholder="Ex: 01310-100"
+                      className="flex-1 bg-zinc-950 border border-zinc-700 rounded-xl py-2 px-3 text-xs text-zinc-200 focus:outline-none focus:border-amber-500 font-mono"
+                      required
+                    />
+                    <button
+                      type="button"
+                      onClick={() => handleLookupCep()}
+                      disabled={lookingUpCep}
+                      className="bg-zinc-800 hover:bg-zinc-700 text-zinc-200 px-2.5 py-2 rounded-xl text-xs font-semibold border border-zinc-700 flex items-center gap-1"
+                    >
+                      <Search className="w-3.5 h-3.5" />
+                      {lookingUpCep ? '...' : 'Buscar'}
+                    </button>
+                  </div>
+                  {cepFeedback && <p className="text-[11px] text-rose-400 mt-1">{cepFeedback}</p>}
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-zinc-300 mb-1">Cidade / Estado</label>

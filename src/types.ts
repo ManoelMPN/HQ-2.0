@@ -17,6 +17,7 @@ export interface HQItem {
   unitPrice?: number;
   bundlePrice?: number;
   allowsUnitPurchase?: boolean;
+  maxDiscountPercent?: number | null;
   isRareSpecial1Real?: boolean;
   isCollection: boolean; // Single issue or entire collection/lot
   collectionCount?: number;
@@ -51,6 +52,7 @@ export interface Seller {
   pixKey?: string;
   bankName?: string;
   accountHolder?: string;
+  maxDiscountPercent?: number;
   totalSales: number;
   totalEarnings: number;
   active: boolean;
@@ -75,6 +77,10 @@ export interface DiscountProposal {
   status: 'pending' | 'approved' | 'rejected';
   createdAt: string;
   buyerMessage?: string;
+  autoApproved?: boolean;
+  discountAmount?: number;
+  paymentLink?: string;
+  pixCopiaECola?: string;
 }
 
 export interface Order {

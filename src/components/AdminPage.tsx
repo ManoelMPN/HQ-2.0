@@ -30,6 +30,9 @@ import {
   MapPin,
   Search,
   ExternalLink,
+  Pencil,
+  Percent,
+  Zap,
 } from 'lucide-react';
 import { HQItem, Seller, ConditionGrade, DiscountProposal, Order } from '../types.ts';
 import { formatBRL, getConditionInfo, normalizeFranchiseName } from '../utils/comicLogic.ts';
@@ -56,11 +59,17 @@ interface AdminPageProps {
   onDeleteSeller?: (id: string) => void;
   onUpdateSellerPassword?: (sellerId: string, newPass: string) => void;
   onUpdateOwnerProfile?: (updatedSeller: Seller) => void;
+  onUpdateSellerMaxDiscount?: (sellerId: string, maxDiscountPercent: number) => void;
   currentSeller: Seller | null;
   onLoginSeller: (email: string, pass: string) => boolean;
   onLogoutSeller: () => void;
   proposals: DiscountProposal[];
-  onUpdateProposalApproval: (proposalId: string, sellerId: string, decision: 'accepted' | 'declined') => void;
+  onUpdateProposalApproval: (
+    proposalId: string,
+    sellerId: string,
+    decision: 'accepted' | 'declined',
+    forceMasterOverride?: boolean
+  ) => void;
   orders: Order[];
   onUpdateOrderTracking: (orderId: string, trackingCode: string) => void;
   onReleasePayout: (orderId: string) => void;
@@ -85,6 +94,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({
   onDeleteSeller,
   onUpdateSellerPassword,
   onUpdateOwnerProfile,
+  onUpdateSellerMaxDiscount,
   currentSeller,
   onLoginSeller,
   onLogoutSeller,
@@ -129,6 +139,8 @@ export const AdminPage: React.FC<AdminPageProps> = ({
   const [formIsCollection, setFormIsCollection] = useState(false);
   const [formCollectionCount, setFormCollectionCount] = useState<number>(1);
   const [formIs1Real, setFormIs1Real] = useState(false);
+  const [formMaxDiscountPercent, setFormMaxDiscountPercent] = useState<string>('');
+  const [editingHQId, setEditingHQId] = useState<string | null>(null);
   const [formSellerId, setFormSellerId] = useState(currentSeller?.id || 'master');
 
   // Master Owner Profile State
@@ -149,6 +161,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({
   const [ownerPixKey, setOwnerPixKey] = useState(masterSeller?.pixKey || 'neto.mmp@gmail.com');
   const [ownerBankName, setOwnerBankName] = useState(masterSeller?.bankName || '');
   const [ownerAccountHolder, setOwnerAccountHolder] = useState(masterSeller?.accountHolder || 'Neto MMP');
+  const [ownerMaxDiscountPercent, setOwnerMaxDiscountPercent] = useState<number>(masterSeller?.maxDiscountPercent ?? 10);
   const [ownerNewPassword, setOwnerNewPassword] = useState('');
   const [ownerSavedMsg, setOwnerSavedMsg] = useState(false);
   const [lookingUpOwnerCep, setLookingUpOwnerCep] = useState(false);
@@ -174,13 +187,22 @@ export const AdminPage: React.FC<AdminPageProps> = ({
   const [cStoreName, setCStoreName] = useState('');
   const [cEmail, setCEmail] = useState('');
   const [cPassword, setCPassword] = useState('');
-  const [cCep, setCCep] = useState('01310-100');
+  const [cCep, setCCep] = useState('');
   const [cAddress, setCAddress] = useState('');
+  const [cMaxDiscount, setCMaxDiscount] = useState<number>(10);
+  const [lookingUpPartnerCep, setLookingUpPartnerCep] = useState(false);
+  const [partnerCepError, setPartnerCepError] = useState<string | null>(null);
   const [copiedPartnerId, setCopiedPartnerId] = useState<string | null>(null);
+
+  // Store-wide discount & proposal controls
+  const [storeDiscountInput, setStoreDiscountInput] = useState<number>(currentSeller?.maxDiscountPercent ?? 10);
+  const [storeDiscountSavedMsg, setStoreDiscountSavedMsg] = useState(false);
+  const [copiedPropId, setCopiedPropId] = useState<string | null>(null);
 
   useEffect(() => {
     if (currentSeller) {
       setFormSellerId(currentSeller.id);
+      setStoreDiscountInput(currentSeller.maxDiscountPercent ?? 10);
     }
   }, [currentSeller]);
 
@@ -203,8 +225,9 @@ export const AdminPage: React.FC<AdminPageProps> = ({
       setOwnerPixKey(masterSeller.pixKey || masterSeller.email || 'neto.mmp@gmail.com');
       setOwnerBankName(masterSeller.bankName || '');
       setOwnerAccountHolder(masterSeller.accountHolder || masterSeller.name || 'Neto MMP');
+      setOwnerMaxDiscountPercent(masterSeller.maxDiscountPercent ?? 10);
     }
-  }, [masterSeller?.id, masterSeller?.name, masterSeller?.email, masterSeller?.cep, masterSeller?.pixKey, masterSeller?.address]);
+  }, [masterSeller?.id, masterSeller?.name, masterSeller?.email, masterSeller?.cep, masterSeller?.pixKey, masterSeller?.address, masterSeller?.maxDiscountPercent]);
 
   // Handle Login
   const handleDoLogin = (e: React.FormEvent) => {
@@ -403,6 +426,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({
       pixKey: ownerPixKey,
       bankName: ownerBankName,
       accountHolder: ownerAccountHolder,
+      maxDiscountPercent: Number(ownerMaxDiscountPercent) || 0,
       password: ownerNewPassword.trim() ? ownerNewPassword.trim() : currentSeller.password,
       totalSales: 0,
       totalEarnings: 0,
@@ -503,6 +527,33 @@ export const AdminPage: React.FC<AdminPageProps> = ({
     setTimeout(() => setCopiedSql(false), 2000);
   };
 
+  // ViaCEP lookup for Collaborator Registration
+  const handleLookupPartnerCep = async (cepToTest?: string) => {
+    const raw = (cepToTest ?? cCep).replace(/\D/g, '');
+    if (raw.length !== 8) {
+      setPartnerCepError('O CEP deve ter 8 dígitos numéricos.');
+      return;
+    }
+
+    setLookingUpPartnerCep(true);
+    setPartnerCepError(null);
+    try {
+      const res = await fetch(`https://viacep.com.br/ws/${raw}/json/`);
+      const data = await res.json();
+      if (data.erro) {
+        setPartnerCepError('CEP não encontrado nos Correios.');
+      } else {
+        setCCep(`${raw.slice(0, 5)}-${raw.slice(5)}`);
+        const parts = [data.logradouro, data.bairro, `${data.localidade}/${data.uf}`].filter(Boolean);
+        setCAddress(parts.join(' - '));
+      }
+    } catch {
+      setPartnerCepError('Falha ao consultar CEP. Preencha cidade/endereço manualmente.');
+    } finally {
+      setLookingUpPartnerCep(false);
+    }
+  };
+
   // Create Partner
   const handleCreatePartner = (e: React.FormEvent) => {
     e.preventDefault();
@@ -513,31 +564,89 @@ export const AdminPage: React.FC<AdminPageProps> = ({
 
     onAddSeller({
       name: cName,
-      storeName: cStoreName || `${cName} Quadrinhos`,
+      storeName: cStoreName || cName,
       email: cEmail,
       role: 'partner',
       password: cPassword,
       cep: cCep || '01310-100',
-      address: cAddress || 'São Paulo - SP',
+      address: cAddress || 'Brasil',
+      maxDiscountPercent: Number(cMaxDiscount) || 0,
     });
 
     setCName('');
     setCStoreName('');
     setCEmail('');
     setCPassword('');
-    setCCep('01310-100');
+    setCCep('');
     setCAddress('');
+    setCMaxDiscount(10);
+    setPartnerCepError(null);
     alert('Colaborador cadastrado com sucesso! Você já pode copiar os dados e enviar a ele.');
   };
 
   const copyPartnerAccess = (partner: Seller) => {
-    const text = `*Bem-vindo ao HQ Master!*\n\nOlá ${partner.name}, seu acesso como parceiro ao nosso acervo está pronto:\n\n*Acesse:* ${window.location.origin}\n*E-mail:* ${partner.email}\n*Senha:* ${partner.password}\n\nFaça login no botão "Área do Colecionador / Admin" para cadastrar e gerenciar seus gibis. Boas vendas!`;
+    const text = `*Bem-vindo ao HQ Master!*\n\nOlá ${partner.name}, seu acesso como parceiro ao nosso acervo está pronto:\n\n*Acesse:* ${window.location.origin}\n*E-mail:* ${partner.email}\n*Senha:* ${partner.password}\n\nFaça login no botão "Painel Admin" para cadastrar e gerenciar seus gibis. Boas vendas!`;
     navigator.clipboard.writeText(text);
     setCopiedPartnerId(partner.id);
     setTimeout(() => setCopiedPartnerId(null), 2500);
   };
 
-  // Publish HQ
+  const resetHQForm = () => {
+    setEditingHQId(null);
+    setFormImages([]);
+    setFormTitle('');
+    setFormDescription('');
+    setFormSeries('');
+    setFormFranchise('');
+    setFormIssueNumber('');
+    setFormYear(1990);
+    setFormPrice(35.0);
+    setFormUnitPrice(25.0);
+    setFormBundlePrice(35.0);
+    setFormAllowsUnitPurchase(false);
+    setFormIsCollection(false);
+    setFormCollectionCount(1);
+    setFormIs1Real(false);
+    setFormMaxDiscountPercent('');
+    setAiAnalysisFeedback(null);
+    setAiAnalysisError(null);
+  };
+
+  const handleStartEditHQ = (hq: HQItem) => {
+    if (!currentSeller) return;
+    if (currentSeller.role !== 'master' && hq.sellerId !== currentSeller.id) {
+      alert('Você só tem permissão para editar os seus próprios anúncios.');
+      return;
+    }
+
+    setEditingHQId(hq.id);
+    setFormImages(hq.images || []);
+    setFormTitle(hq.title);
+    setFormDescription(hq.description || '');
+    setFormPublisher(hq.publisher);
+    setFormSeries(hq.series);
+    setFormFranchise(hq.franchiseCategory || '');
+    setFormIssueNumber(hq.issueNumber || '');
+    setFormYear(hq.year || 1990);
+    setFormPrice(hq.price || 0);
+    setFormUnitPrice(hq.unitPrice ?? hq.price ?? 0);
+    setFormBundlePrice(hq.bundlePrice ?? hq.price ?? 0);
+    setFormAllowsUnitPurchase(Boolean(hq.allowsUnitPurchase));
+    setFormCondition(hq.condition || 'bom');
+    setFormConditionDetails(hq.conditionDetails || '');
+    setFormIsCollection(Boolean(hq.isCollection));
+    setFormCollectionCount(hq.collectionCount || 1);
+    setFormIs1Real(Boolean(hq.isRareSpecial1Real));
+    setFormMaxDiscountPercent(
+      hq.maxDiscountPercent !== undefined && hq.maxDiscountPercent !== null ? String(hq.maxDiscountPercent) : ''
+    );
+    setFormSellerId(hq.sellerId);
+    setAiAnalysisFeedback(null);
+    setAiAnalysisError(null);
+    setActiveTab('new-hq');
+  };
+
+  // Publish or Update HQ
   const handleSubmitNewHQ = (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -551,7 +660,51 @@ export const AdminPage: React.FC<AdminPageProps> = ({
       return;
     }
 
-    const currentPublisher = sellers.find((s) => s.id === formSellerId) || currentSeller;
+    const parsedMaxDiscount =
+      formMaxDiscountPercent.trim() === ''
+        ? null
+        : Math.max(0, Math.min(80, Number(formMaxDiscountPercent)));
+
+    if (editingHQId) {
+      const existing = hqs.find((h) => h.id === editingHQId);
+      if (!existing) return;
+      if (currentSeller && currentSeller.role !== 'master' && existing.sellerId !== currentSeller.id) {
+        alert('Você só tem permissão para editar os seus próprios anúncios.');
+        return;
+      }
+
+      onUpdateHQ({
+        ...existing,
+        title: formTitle,
+        description: formDescription || 'Exemplar com miolo completo, páginas íntegras e preservadas para leitura.',
+        publisher: formPublisher,
+        series: formSeries,
+        franchiseCategory: formFranchise || 'Quadrinhos',
+        issueNumber: formIssueNumber || '01',
+        year: formYear,
+        condition: formCondition,
+        conditionDetails: formConditionDetails,
+        price: formIsCollection ? formBundlePrice : formPrice,
+        unitPrice: formUnitPrice,
+        bundlePrice: formBundlePrice,
+        allowsUnitPurchase: formAllowsUnitPurchase,
+        maxDiscountPercent: parsedMaxDiscount,
+        isRareSpecial1Real: formIs1Real,
+        isCollection: formIsCollection,
+        collectionCount: formIsCollection ? formCollectionCount : 1,
+        images: formImages,
+        sellerAddress: '',
+        sellerCep: '',
+      });
+
+      resetHQForm();
+      alert('Anúncio atualizado com sucesso!');
+      setActiveTab('catalog');
+      return;
+    }
+
+    const targetSellerId = currentSeller?.role === 'master' ? formSellerId : currentSeller?.id || 'master';
+    const currentPublisher = sellers.find((s) => s.id === targetSellerId) || currentSeller;
 
     onAddHQ({
       title: formTitle,
@@ -569,11 +722,12 @@ export const AdminPage: React.FC<AdminPageProps> = ({
       unitPrice: formUnitPrice,
       bundlePrice: formBundlePrice,
       allowsUnitPurchase: formAllowsUnitPurchase,
+      maxDiscountPercent: parsedMaxDiscount,
       isRareSpecial1Real: formIs1Real,
       isCollection: formIsCollection,
       collectionCount: formIsCollection ? formCollectionCount : 1,
       images: formImages,
-      sellerId: formSellerId,
+      sellerId: targetSellerId,
       sellerName: currentPublisher?.storeName || currentPublisher?.name || 'HQ Master',
       sellerAddress: '',
       sellerCep: '',
@@ -581,24 +735,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({
       sold: false,
     });
 
-    // Reset Form
-    setFormImages([]);
-    setFormTitle('');
-    setFormDescription('');
-    setFormSeries('');
-    setFormFranchise('');
-    setFormIssueNumber('');
-    setFormYear(1990);
-    setFormPrice(35.0);
-    setFormUnitPrice(25.0);
-    setFormBundlePrice(35.0);
-    setFormAllowsUnitPurchase(false);
-    setFormIsCollection(false);
-    setFormCollectionCount(1);
-    setFormIs1Real(false);
-    setAiAnalysisFeedback(null);
-    setAiAnalysisError(null);
-
+    resetHQForm();
     alert('Revista publicada com sucesso no catálogo!');
     setActiveTab('catalog');
   };
@@ -1067,6 +1204,25 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                         className="w-full bg-zinc-900 border border-zinc-700 rounded-xl px-3 py-2 text-xs text-white"
                       />
                     </div>
+
+                    <div className="sm:col-span-2 pt-2 border-t border-zinc-800/80">
+                      <label className="block text-[11px] text-zinc-300 font-semibold mb-1">
+                        Desconto Máximo Automático da Sua Loja (%)
+                      </label>
+                      <div className="flex items-center gap-3">
+                        <input
+                          type="number"
+                          min={0}
+                          max={80}
+                          value={ownerMaxDiscountPercent}
+                          onChange={(e) => setOwnerMaxDiscountPercent(Number(e.target.value))}
+                          className="w-28 bg-zinc-900 border border-zinc-700 rounded-xl px-3 py-2 text-xs text-amber-400 font-bold"
+                        />
+                        <span className="text-[11px] text-zinc-400">
+                          Ofertas de compradores até esse limite são aceitas automaticamente na hora e liberam pagamento imediato.
+                        </span>
+                      </div>
+                    </div>
                   </div>
                 </div>
 
@@ -1081,16 +1237,32 @@ export const AdminPage: React.FC<AdminPageProps> = ({
             </div>
           )}
 
-          {/* TAB 1: NOVA PUBLICAÇÃO (Com Câmera, Lotes e Leitura IA) */}
+          {/* TAB 1: NOVA PUBLICAÇÃO / EDIÇÃO */}
           {activeTab === 'new-hq' && (
             <div className="bg-[#111520] border border-zinc-800 rounded-3xl p-5 sm:p-7 space-y-6">
-              <div>
-                <h3 className="text-base font-black text-white font-['Space_Grotesk']">
-                  Cadastrar Revista ou Lote de Coleção
-                </h3>
-                <p className="text-xs text-zinc-400">
-                  Fotografe uma capa individual ou várias capas de uma coleção. A IA reconhecerá o título, ano, número, precificará o exemplar e sugerirá desconto se for lote.
-                </p>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h3 className="text-base font-black text-white font-['Space_Grotesk']">
+                    {editingHQId ? 'Editar Anúncio Publicado' : 'Cadastrar Revista ou Lote de Coleção'}
+                  </h3>
+                  <p className="text-xs text-zinc-400">
+                    {editingHQId
+                      ? 'Atualize valores, descrição, limite de desconto automático ou fotos do seu anúncio.'
+                      : 'Fotografe uma capa individual ou várias capas de uma coleção. A IA reconhecerá o título, ano, número, precificará o exemplar e sugerirá desconto se for lote.'}
+                  </p>
+                </div>
+                {editingHQId && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      resetHQForm();
+                      setActiveTab('catalog');
+                    }}
+                    className="bg-zinc-800 hover:bg-zinc-700 text-zinc-300 px-3 py-1.5 rounded-xl text-xs font-semibold border border-zinc-700"
+                  >
+                    Cancelar Edição
+                  </button>
+                )}
               </div>
 
               {/* Photo Capture and Upload Section */}
@@ -1398,20 +1570,41 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                         </div>
                       </div>
                     ) : (
-                      <div className="max-w-xs">
-                        <label className="block text-[11px] text-zinc-400 mb-1">
-                          Preço da Revista (R$) *
+                        <div className="max-w-xs">
+                          <label className="block text-[11px] text-zinc-400 mb-1">
+                            Preço da Revista (R$) *
+                          </label>
+                          <input
+                            type="number"
+                            step="0.5"
+                            value={formPrice}
+                            onChange={(e) => setFormPrice(Number(e.target.value))}
+                            className="w-full bg-zinc-900 border border-zinc-700 rounded-xl px-3 py-2 text-xs text-amber-400 font-bold"
+                            required
+                          />
+                        </div>
+                      )}
+
+                    {/* Per-unit / Per-lot Auto-Accept Max Discount */}
+                    <div className="pt-3 border-t border-zinc-800/80 grid grid-cols-1 sm:grid-cols-2 gap-3 items-center">
+                      <div>
+                        <label className="block text-[11px] font-semibold text-zinc-300 mb-1">
+                          Desconto Máximo Automático deste Item / Lote (%)
                         </label>
                         <input
                           type="number"
-                          step="0.5"
-                          value={formPrice}
-                          onChange={(e) => setFormPrice(Number(e.target.value))}
-                          className="w-full bg-zinc-900 border border-zinc-700 rounded-xl px-3 py-2 text-xs text-amber-400 font-bold"
-                          required
+                          min={0}
+                          max={80}
+                          value={formMaxDiscountPercent}
+                          onChange={(e) => setFormMaxDiscountPercent(e.target.value)}
+                          placeholder={`Padrão da loja (${currentSeller?.maxDiscountPercent ?? 10}%)`}
+                          className="w-full bg-zinc-900 border border-zinc-700 rounded-xl px-3 py-1.5 text-xs text-emerald-400 font-bold"
                         />
                       </div>
-                    )}
+                      <p className="text-[11px] text-zinc-400 leading-relaxed">
+                        Deixe em branco para usar o % padrão da sua loja ({currentSeller?.maxDiscountPercent ?? 10}%), ou defina um % específico (ex: 15% para lote, 0% para não dar desconto automático).
+                      </p>
+                    </div>
                   </div>
 
                   <div className="sm:col-span-2">
@@ -1434,7 +1627,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                     className="w-full bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-black font-extrabold py-3.5 rounded-xl text-xs transition-transform active:scale-95 shadow-lg flex items-center justify-center gap-2"
                   >
                     <CheckCircle2 className="w-4 h-4" />
-                    Publicar HQ no Catálogo Oficial
+                    {editingHQId ? 'Salvar Alterações do Anúncio' : 'Publicar HQ no Catálogo Oficial'}
                   </button>
                 </div>
               </form>
@@ -1442,72 +1635,110 @@ export const AdminPage: React.FC<AdminPageProps> = ({
           )}
 
           {/* TAB 2: CATÁLOGO & ESTOQUE */}
-          {activeTab === 'catalog' && (
-            <div className="space-y-4">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <h3 className="text-base font-black text-white font-['Space_Grotesk']">
-                    Catálogo e Estoque Ativo ({hqs.length} revistas)
-                  </h3>
-                  <p className="text-xs text-zinc-400">
-                    Gerencie os exemplares cadastrados por você e seus parceiros.
-                  </p>
-                </div>
-              </div>
+          {activeTab === 'catalog' && (() => {
+            const visibleCatalogHQs =
+              currentSeller.role === 'master'
+                ? hqs
+                : hqs.filter((hq) => hq.sellerId === currentSeller.id);
 
-              {hqs.length === 0 ? (
-                <div className="bg-[#111520] border border-zinc-800 rounded-3xl p-12 text-center space-y-3">
-                  <Package className="w-10 h-10 text-zinc-700 mx-auto" />
-                  <p className="text-xs text-zinc-400">Nenhuma revista cadastrada no momento.</p>
-                  <button
-                    onClick={() => setActiveTab('new-hq')}
-                    className="bg-amber-500 text-black font-bold px-4 py-2 rounded-xl text-xs"
-                  >
-                    Cadastrar Primeira Revista
-                  </button>
+            return (
+              <div className="space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h3 className="text-base font-black text-white font-['Space_Grotesk']">
+                      {currentSeller.role === 'master'
+                        ? `Catálogo e Estoque Ativo (${visibleCatalogHQs.length} revistas)`
+                        : `Meus Anúncios (${visibleCatalogHQs.length} revistas)`}
+                    </h3>
+                    <p className="text-xs text-zinc-400">
+                      {currentSeller.role === 'master'
+                        ? 'Gerencie todos os exemplares cadastrados na loja e pelos seus parceiros.'
+                        : 'Você visualiza, edita e remove apenas os seus próprios anúncios publicados.'}
+                    </p>
+                  </div>
                 </div>
-              ) : (
-                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-                  {hqs.map((hq) => (
-                    <div
-                      key={hq.id}
-                      className="bg-[#111520] border border-zinc-800 rounded-2xl p-3.5 space-y-3 flex flex-col justify-between"
+
+                {visibleCatalogHQs.length === 0 ? (
+                  <div className="bg-[#111520] border border-zinc-800 rounded-3xl p-12 text-center space-y-3">
+                    <Package className="w-10 h-10 text-zinc-700 mx-auto" />
+                    <p className="text-xs text-zinc-400">Você ainda não possui nenhuma revista publicada.</p>
+                    <button
+                      onClick={() => {
+                        resetHQForm();
+                        setActiveTab('new-hq');
+                      }}
+                      className="bg-amber-500 text-black font-bold px-4 py-2 rounded-xl text-xs"
                     >
-                      <div className="space-y-2">
-                        <img
-                          src={hq.images[0] || 'https://images.unsplash.com/photo-1601645191163-3fc0d5d34e35?auto=format&fit=crop&w=400&q=80'}
-                          alt={hq.title}
-                          className="w-full h-44 object-cover rounded-xl bg-zinc-950 border border-zinc-800"
-                        />
-                        <div>
-                          <h4 className="text-xs font-bold text-white truncate">{hq.title}</h4>
-                          <span className="text-[11px] text-zinc-400 block">{hq.publisher} • {hq.year}</span>
-                          <span className="text-xs font-black text-amber-400 font-['Space_Grotesk'] block mt-1">
-                            {formatBRL(hq.price)}
-                          </span>
-                        </div>
-                      </div>
-
-                      <div className="flex items-center justify-between border-t border-zinc-800 pt-2 text-xs">
-                        <span className="text-[10px] text-zinc-500">
-                          {hq.sellerName}
-                        </span>
-                        <button
-                          onClick={() => {
-                            if (confirm(`Excluir ${hq.title}?`)) onDeleteHQ(hq.id);
-                          }}
-                          className="text-zinc-500 hover:text-rose-400 p-1"
-                          title="Excluir"
+                      Cadastrar Primeira Revista
+                    </button>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                    {visibleCatalogHQs.map((hq) => {
+                      const canManageHQ = currentSeller.role === 'master' || hq.sellerId === currentSeller.id;
+                      return (
+                        <div
+                          key={hq.id}
+                          className="bg-[#111520] border border-zinc-800 rounded-2xl p-3.5 space-y-3 flex flex-col justify-between"
                         >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
+                          <div className="space-y-2">
+                            <img
+                              src={hq.images[0] || 'https://images.unsplash.com/photo-1601645191163-3fc0d5d34e35?auto=format&fit=crop&w=400&q=80'}
+                              alt={hq.title}
+                              className="w-full h-44 object-cover rounded-xl bg-zinc-950 border border-zinc-800"
+                            />
+                            <div>
+                              <h4 className="text-xs font-bold text-white truncate">{hq.title}</h4>
+                              <span className="text-[11px] text-zinc-400 block">{hq.publisher} • {hq.year}</span>
+                              <div className="flex items-center justify-between mt-1">
+                                <span className="text-xs font-black text-amber-400 font-['Space_Grotesk']">
+                                  {formatBRL(hq.price)}
+                                </span>
+                                {hq.maxDiscountPercent !== undefined && hq.maxDiscountPercent !== null && (
+                                  <span className="text-[10px] font-semibold bg-emerald-950/60 text-emerald-300 border border-emerald-800/60 px-1.5 py-0.5 rounded">
+                                    Desc. auto {hq.maxDiscountPercent}%
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center justify-between border-t border-zinc-800 pt-2 text-xs">
+                            <span className="text-[10px] text-zinc-500 truncate max-w-[130px]">
+                              {hq.sellerName}
+                            </span>
+
+                            {canManageHQ && (
+                              <div className="flex items-center gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => handleStartEditHQ(hq)}
+                                  className="text-zinc-400 hover:text-amber-400 p-1"
+                                  title="Editar anúncio"
+                                >
+                                  <Pencil className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (confirm(`Excluir ${hq.title}?`)) onDeleteHQ(hq.id);
+                                  }}
+                                  className="text-zinc-500 hover:text-rose-400 p-1"
+                                  title="Excluir anúncio"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
 
           {/* TAB 3: GESTÃO DE COLABORADORES */}
           {activeTab === 'collaborators' && currentSeller.role === 'master' && (
@@ -1595,23 +1826,59 @@ export const AdminPage: React.FC<AdminPageProps> = ({
 
                   <div>
                     <label className="block text-xs font-semibold text-zinc-300 mb-1">CEP de Postagem do Parceiro</label>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        maxLength={9}
+                        value={cCep}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setCCep(val);
+                          setPartnerCepError(null);
+                          if (val.replace(/\D/g, '').length === 8) {
+                            void handleLookupPartnerCep(val);
+                          }
+                        }}
+                        placeholder="00000-000"
+                        className="flex-1 bg-zinc-950 border border-zinc-700 rounded-xl px-3.5 py-2 text-xs text-white font-mono"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => handleLookupPartnerCep()}
+                        disabled={lookingUpPartnerCep}
+                        className="bg-zinc-800 hover:bg-zinc-700 text-zinc-200 px-3 py-2 rounded-xl text-xs font-semibold border border-zinc-700 flex items-center gap-1"
+                      >
+                        <Search className="w-3.5 h-3.5" />
+                        {lookingUpPartnerCep ? 'Buscando...' : 'Buscar CEP'}
+                      </button>
+                    </div>
+                    {partnerCepError && (
+                      <p className="text-[11px] text-rose-400 mt-1">{partnerCepError}</p>
+                    )}
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-zinc-300 mb-1">Endereço / Cidade / Estado</label>
                     <input
                       type="text"
-                      value={cCep}
-                      onChange={(e) => setCCep(e.target.value)}
-                      placeholder="20040-002"
+                      value={cAddress}
+                      onChange={(e) => setCAddress(e.target.value)}
+                      placeholder="Preenchido automaticamente pelo CEP ou digite"
                       className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3.5 py-2 text-xs text-white"
                     />
                   </div>
 
                   <div>
-                    <label className="block text-xs font-semibold text-zinc-300 mb-1">Cidade / Estado</label>
+                    <label className="block text-xs font-semibold text-zinc-300 mb-1">
+                      Desconto Máximo Automático da Banca (%)
+                    </label>
                     <input
-                      type="text"
-                      value={cAddress}
-                      onChange={(e) => setCAddress(e.target.value)}
-                      placeholder="Rio de Janeiro - RJ"
-                      className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3.5 py-2 text-xs text-white"
+                      type="number"
+                      min={0}
+                      max={80}
+                      value={cMaxDiscount}
+                      onChange={(e) => setCMaxDiscount(Number(e.target.value))}
+                      className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3.5 py-2 text-xs text-emerald-400 font-bold"
                     />
                   </div>
 
@@ -1766,59 +2033,223 @@ export const AdminPage: React.FC<AdminPageProps> = ({
             </div>
           )}
 
-          {/* TAB 5: PROPOSTAS DE DESCONTO */}
-          {activeTab === 'proposals' && (
-            <div className="space-y-4">
-              <div>
-                <h3 className="text-base font-black text-white font-['Space_Grotesk']">
-                  Propostas de Desconto em Pacotes
-                </h3>
-                <p className="text-xs text-zinc-400">
-                  Propostas enviadas por colecionadores comprando pacotes de revistas. Requer aprovação dos vendedores envolvidos.
-                </p>
-              </div>
+          {/* TAB 5: PROPOSTAS DE DESCONTO & DESCONTO AUTOMÁTICO */}
+          {activeTab === 'proposals' && (() => {
+            const visibleProposals =
+              currentSeller.role === 'master'
+                ? proposals
+                : proposals.filter(
+                    (p) =>
+                      p.itemsSummary.some((i) => i.sellerId === currentSeller.id) ||
+                      currentSeller.id in (p.sellerApprovals || {})
+                  );
 
-              {proposals.length === 0 ? (
-                <div className="border border-zinc-800 rounded-3xl p-12 text-center text-zinc-500 text-xs bg-[#10141f]">
-                  Nenhuma proposta de desconto pendente no momento.
+            return (
+              <div className="space-y-5">
+                <div>
+                  <h3 className="text-base font-black text-white font-['Space_Grotesk']">
+                    Propostas de Desconto & Aprovação Automática
+                  </h3>
+                  <p className="text-xs text-zinc-400">
+                    Defina o desconto máximo automático da sua loja. Ofertas acima desse limite aparecem aqui para você aprovar e liberar o link de pagamento.
+                  </p>
                 </div>
-              ) : (
-                <div className="space-y-3">
-                  {proposals.map((prop) => (
-                    <div key={prop.id} className="bg-[#111520] border border-zinc-800 rounded-2xl p-4 space-y-3">
-                      <div className="flex justify-between items-start">
-                        <div>
-                          <span className="font-bold text-white text-sm">Colecionador: {prop.buyerName}</span>
-                          <span className="text-zinc-400 text-xs block">{prop.buyerEmail}</span>
-                        </div>
-                        <div className="text-right">
-                          <span className="text-xs text-zinc-400 line-through block">{formatBRL(prop.originalTotal)}</span>
-                          <span className="text-emerald-400 font-black text-base font-['Space_Grotesk'] block">
-                            Proposta: {formatBRL(prop.proposedTotal)}
-                          </span>
-                        </div>
-                      </div>
 
-                      <div className="flex justify-end gap-2 pt-2 border-t border-zinc-800">
-                        <button
-                          onClick={() => onUpdateProposalApproval(prop.id, currentSeller.id, 'accepted')}
-                          className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-3 py-1 rounded-xl text-xs"
-                        >
-                          Aceitar Desconto
-                        </button>
-                        <button
-                          onClick={() => onUpdateProposalApproval(prop.id, currentSeller.id, 'declined')}
-                          className="bg-rose-600 hover:bg-rose-500 text-white font-bold px-3 py-1 rounded-xl text-xs"
-                        >
-                          Recusar
-                        </button>
-                      </div>
+                {/* Store-wide Max Discount Card */}
+                <div className="bg-[#111520] border border-zinc-800 rounded-2xl p-4 sm:p-5 flex flex-wrap items-center justify-between gap-4">
+                  <div className="space-y-1 max-w-xl">
+                    <div className="flex items-center gap-2 text-sm font-bold text-white">
+                      <Percent className="w-4 h-4 text-emerald-400" />
+                      <span>Desconto Máximo Automático da Banca ({currentSeller.storeName})</span>
                     </div>
-                  ))}
+                    <p className="text-[11px] text-zinc-400 leading-relaxed">
+                      Qualquer proposta até este percentual é aceita automaticamente e já gera o link de pagamento para o comprador. (Você também pode definir um % diferente em cada HQ ou lote individual.)
+                    </p>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      min={0}
+                      max={80}
+                      value={storeDiscountInput}
+                      onChange={(e) => setStoreDiscountInput(Number(e.target.value))}
+                      className="w-20 bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2 text-xs text-emerald-400 font-bold text-center"
+                    />
+                    <span className="text-xs font-bold text-zinc-400">%</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onUpdateSellerMaxDiscount?.(currentSeller.id, storeDiscountInput);
+                        setStoreDiscountSavedMsg(true);
+                        setTimeout(() => setStoreDiscountSavedMsg(false), 2500);
+                      }}
+                      className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-3.5 py-2 rounded-xl text-xs"
+                    >
+                      {storeDiscountSavedMsg ? 'Salvo!' : 'Salvar Limite'}
+                    </button>
+                  </div>
                 </div>
-              )}
-            </div>
-          )}
+
+                {visibleProposals.length === 0 ? (
+                  <div className="border border-zinc-800 rounded-3xl p-12 text-center text-zinc-500 text-xs bg-[#10141f]">
+                    Nenhuma proposta de desconto recebida até o momento.
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {visibleProposals.map((prop) => {
+                      const pctRequested =
+                        prop.originalTotal > 0
+                          ? Math.round(((prop.originalTotal - prop.proposedTotal) / prop.originalTotal) * 100)
+                          : 0;
+                      const myApproval = prop.sellerApprovals?.[currentSeller.id];
+
+                      return (
+                        <div key={prop.id} className="bg-[#111520] border border-zinc-800 rounded-2xl p-4 space-y-3">
+                          <div className="flex flex-wrap justify-between items-start gap-2">
+                            <div className="space-y-0.5">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="font-bold text-white text-sm">Colecionador: {prop.buyerName}</span>
+                                {prop.status === 'approved' && (
+                                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 flex items-center gap-1">
+                                    {prop.autoApproved ? <Zap className="w-3 h-3" /> : <CheckCircle2 className="w-3 h-3" />}
+                                    {prop.autoApproved ? 'Aceita Automaticamente' : 'Aprovada — Link Gerado'}
+                                  </span>
+                                )}
+                                {prop.status === 'rejected' && (
+                                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/40">
+                                    Recusada
+                                  </span>
+                                )}
+                                {prop.status === 'pending' && (
+                                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                                    Aguardando Aprovação
+                                  </span>
+                                )}
+                              </div>
+                              <span className="text-zinc-400 text-xs block">
+                                {prop.buyerEmail} {prop.buyerPhone ? `• ${prop.buyerPhone}` : ''}
+                              </span>
+                            </div>
+
+                            <div className="text-right">
+                              <span className="text-xs text-zinc-400 line-through block">{formatBRL(prop.originalTotal)}</span>
+                              <span className="text-emerald-400 font-black text-base font-['Space_Grotesk'] block">
+                                Proposta: {formatBRL(prop.proposedTotal)} ({pctRequested}% OFF)
+                              </span>
+                            </div>
+                          </div>
+
+                          {/* Items included */}
+                          {prop.itemsSummary && prop.itemsSummary.length > 0 && (
+                            <div className="bg-zinc-950/70 border border-zinc-800/80 rounded-xl p-2.5 space-y-1 text-[11px] text-zinc-300">
+                              {prop.itemsSummary.map((item, idx) => (
+                                <div key={idx} className="flex justify-between gap-2">
+                                  <span className="truncate">
+                                    {item.title} <span className="text-zinc-500">({item.sellerName})</span>
+                                  </span>
+                                  <span className="font-semibold text-zinc-200 shrink-0">{formatBRL(item.price)}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+
+                          {prop.buyerMessage && (
+                            <p className="text-xs text-zinc-300 italic bg-zinc-900/60 px-3 py-2 rounded-xl border border-zinc-800/70">
+                              &ldquo;{prop.buyerMessage}&rdquo;
+                            </p>
+                          )}
+
+                          {/* Approved Payment Link Box */}
+                          {prop.status === 'approved' && prop.paymentLink && (
+                            <div className="bg-emerald-950/30 border border-emerald-700/50 rounded-xl p-3 space-y-2 text-xs">
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <span className="font-bold text-emerald-300">Link de Pagamento com Desconto Liberado:</span>
+                                <div className="flex items-center gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      navigator.clipboard.writeText(prop.paymentLink || '');
+                                      setCopiedPropId(prop.id);
+                                      setTimeout(() => setCopiedPropId(null), 2500);
+                                    }}
+                                    className="bg-zinc-800 hover:bg-zinc-700 text-zinc-100 px-2.5 py-1 rounded-lg text-[11px] font-semibold flex items-center gap-1"
+                                  >
+                                    {copiedPropId === prop.id ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                                    {copiedPropId === prop.id ? 'Link Copiado!' : 'Copiar Link'}
+                                  </button>
+                                  <a
+                                    href={`https://wa.me/${(prop.buyerPhone || '').replace(/\D/g, '')}?text=${encodeURIComponent(
+                                      `Olá ${prop.buyerName}! Sua proposta de ${formatBRL(prop.proposedTotal)} na HQ Master foi APROVADA! Finalize seu pedido com entrega pelo link: ${prop.paymentLink}`
+                                    )}`}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="bg-emerald-600 hover:bg-emerald-500 text-white px-2.5 py-1 rounded-lg text-[11px] font-bold flex items-center gap-1"
+                                  >
+                                    <Share2 className="w-3.5 h-3.5" />
+                                    Enviar no WhatsApp
+                                  </a>
+                                </div>
+                              </div>
+                              <code className="block text-[11px] text-amber-300 font-mono truncate bg-zinc-950/80 px-2.5 py-1.5 rounded-lg border border-zinc-800">
+                                {prop.paymentLink}
+                              </code>
+                            </div>
+                          )}
+
+                          {/* Action Buttons when Pending */}
+                          {prop.status === 'pending' && (
+                            <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-zinc-800">
+                              <span className="text-[11px] text-zinc-400">
+                                {myApproval === 'accepted' && currentSeller.role !== 'master'
+                                  ? 'Você já aceitou sua parte — aguardando outro vendedor.'
+                                  : 'Clique abaixo para aprovar e gerar o link de pagamento:'}
+                              </span>
+
+                              <div className="flex gap-2">
+                                {(currentSeller.role === 'master' || myApproval !== 'accepted') && (
+                                  <>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        onUpdateProposalApproval(
+                                          prop.id,
+                                          currentSeller.id,
+                                          'accepted',
+                                          currentSeller.role === 'master'
+                                        )
+                                      }
+                                      className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-3.5 py-1.5 rounded-xl text-xs transition-colors"
+                                    >
+                                      Aceitar Desconto & Gerar Link
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        onUpdateProposalApproval(
+                                          prop.id,
+                                          currentSeller.id,
+                                          'declined',
+                                          currentSeller.role === 'master'
+                                        )
+                                      }
+                                      className="bg-rose-600 hover:bg-rose-500 text-white font-bold px-3.5 py-1.5 rounded-xl text-xs transition-colors"
+                                    >
+                                      Recusar
+                                    </button>
+                                  </>
+                                )}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
 
           {/* TAB 6: CONFIGURAÇÕES & CHAVES */}
           {activeTab === 'settings' && currentSeller.role === 'master' && (

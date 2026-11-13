@@ -108,6 +108,7 @@ function mapSellerToRow(s: Seller, includeExtended = true) {
       pix_key: s.pixKey || s.email || '',
       bank_name: s.bankName || '',
       account_holder: s.accountHolder || s.name || '',
+      max_discount_percent: Number(s.maxDiscountPercent ?? 10),
     });
   }
 
@@ -136,6 +137,7 @@ function mapRowToSeller(row: any): Seller {
     pixKey: row.pix_key || row.email || '',
     bankName: row.bank_name || '',
     accountHolder: row.account_holder || row.name || '',
+    maxDiscountPercent: row.max_discount_percent !== undefined && row.max_discount_percent !== null ? Number(row.max_discount_percent) : 10,
     totalSales: Number(row.total_sales || 0),
     totalEarnings: Number(row.total_earnings || 0),
     active: row.active ?? true,
@@ -176,6 +178,7 @@ function mapHQToRow(hq: HQItem, includeExtended = true) {
       unit_price: hq.unitPrice ?? hq.price,
       bundle_price: hq.bundlePrice ?? hq.price,
       allows_unit_purchase: Boolean(hq.allowsUnitPurchase),
+      max_discount_percent: hq.maxDiscountPercent !== undefined && hq.maxDiscountPercent !== null ? Number(hq.maxDiscountPercent) : null,
     });
   }
 
@@ -200,6 +203,7 @@ function mapRowToHQ(row: any): HQItem {
     unitPrice: row.unit_price !== undefined && row.unit_price !== null ? Number(row.unit_price) : Number(row.price || 0),
     bundlePrice: row.bundle_price !== undefined && row.bundle_price !== null ? Number(row.bundle_price) : Number(row.price || 0),
     allowsUnitPurchase: Boolean(row.allows_unit_purchase),
+    maxDiscountPercent: row.max_discount_percent !== undefined && row.max_discount_percent !== null ? Number(row.max_discount_percent) : null,
     isRareSpecial1Real: Boolean(row.is_rare_special_1real),
     isCollection: Boolean(row.is_collection),
     collectionCount: Number(row.collection_count || 1),
@@ -287,8 +291,8 @@ function mapRowToOrder(row: any): Order {
   };
 }
 
-function mapProposalToRow(p: DiscountProposal) {
-  return {
+function mapProposalToRow(p: DiscountProposal, includeExtended = true) {
+  const base: Record<string, any> = {
     id: p.id,
     buyer_name: p.buyerName,
     buyer_email: p.buyerEmail,
@@ -302,6 +306,17 @@ function mapProposalToRow(p: DiscountProposal) {
     buyer_message: p.buyerMessage || '',
     created_at: p.createdAt || new Date().toISOString(),
   };
+
+  if (includeExtended) {
+    Object.assign(base, {
+      auto_approved: Boolean(p.autoApproved),
+      discount_amount: Number(p.discountAmount || Math.max(0, (p.originalTotal || 0) - (p.proposedTotal || 0))),
+      payment_link: p.paymentLink || '',
+      pix_copia_e_cola: p.pixCopiaECola || '',
+    });
+  }
+
+  return base;
 }
 
 function mapRowToProposal(row: any): DiscountProposal {
@@ -317,6 +332,12 @@ function mapRowToProposal(row: any): DiscountProposal {
     sellerApprovals: row.seller_approvals || {},
     status: row.status || 'pending',
     buyerMessage: row.buyer_message || '',
+    autoApproved: Boolean(row.auto_approved),
+    discountAmount: row.discount_amount !== undefined && row.discount_amount !== null
+      ? Number(row.discount_amount)
+      : Math.max(0, Number(row.original_total || 0) - Number(row.proposed_total || 0)),
+    paymentLink: row.payment_link || '',
+    pixCopiaECola: row.pix_copia_e_cola || '',
     createdAt: row.created_at || new Date().toISOString(),
   };
 }
@@ -540,8 +561,11 @@ export async function upsertProposalToSupabase(proposal: DiscountProposal): Prom
   const sb = getSupabase();
   if (!sb) return { ok: false };
 
-  const { error } = await sb.from('discount_proposals').upsert(mapProposalToRow(proposal), { onConflict: 'id' });
-  if (error) return { ok: false, error: error.message };
+  const { error } = await sb.from('discount_proposals').upsert(mapProposalToRow(proposal, true), { onConflict: 'id' });
+  if (error) {
+    const retry = await sb.from('discount_proposals').upsert(mapProposalToRow(proposal, false), { onConflict: 'id' });
+    if (retry.error) return { ok: false, error: retry.error.message };
+  }
   return { ok: true };
 }
 
@@ -670,10 +694,17 @@ ALTER TABLE public.sellers ADD COLUMN IF NOT EXISTS pix_key_type TEXT DEFAULT 'e
 ALTER TABLE public.sellers ADD COLUMN IF NOT EXISTS pix_key TEXT;
 ALTER TABLE public.sellers ADD COLUMN IF NOT EXISTS bank_name TEXT;
 ALTER TABLE public.sellers ADD COLUMN IF NOT EXISTS account_holder TEXT;
+ALTER TABLE public.sellers ADD COLUMN IF NOT EXISTS max_discount_percent NUMERIC(5,2) DEFAULT 10;
 
 ALTER TABLE public.hqs ADD COLUMN IF NOT EXISTS unit_price NUMERIC(10,2);
 ALTER TABLE public.hqs ADD COLUMN IF NOT EXISTS bundle_price NUMERIC(10,2);
 ALTER TABLE public.hqs ADD COLUMN IF NOT EXISTS allows_unit_purchase BOOLEAN DEFAULT false;
+ALTER TABLE public.hqs ADD COLUMN IF NOT EXISTS max_discount_percent NUMERIC(5,2);
+
+ALTER TABLE public.discount_proposals ADD COLUMN IF NOT EXISTS auto_approved BOOLEAN DEFAULT false;
+ALTER TABLE public.discount_proposals ADD COLUMN IF NOT EXISTS discount_amount NUMERIC(10,2);
+ALTER TABLE public.discount_proposals ADD COLUMN IF NOT EXISTS payment_link TEXT;
+ALTER TABLE public.discount_proposals ADD COLUMN IF NOT EXISTS pix_copia_e_cola TEXT;
 
 ALTER TABLE public.orders ADD COLUMN IF NOT EXISTS buyer_phone TEXT;
 ALTER TABLE public.orders ADD COLUMN IF NOT EXISTS buyer_cpf TEXT;

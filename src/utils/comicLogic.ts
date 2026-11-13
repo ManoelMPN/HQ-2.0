@@ -234,6 +234,58 @@ export function evaluateProposalStatus(
   return 'pending';
 }
 
+export function calculateAutoDiscountLimit(
+  items: CartItem[],
+  sellers: { id: string; maxDiscountPercent?: number }[]
+) {
+  const subtotal = Number(
+    items.reduce((acc, item) => acc + item.hq.price * item.quantity, 0).toFixed(2)
+  );
+
+  let maxAutoDiscountAmount = 0;
+
+  for (const item of items) {
+    const seller = sellers.find((s) => s.id === item.hq.sellerId);
+    const rawPct =
+      item.hq.maxDiscountPercent !== undefined && item.hq.maxDiscountPercent !== null
+        ? Number(item.hq.maxDiscountPercent)
+        : Number(seller?.maxDiscountPercent ?? 0);
+    const clampedPct = Math.max(0, Math.min(80, Number.isFinite(rawPct) ? rawPct : 0));
+    maxAutoDiscountAmount += item.hq.price * item.quantity * (clampedPct / 100);
+  }
+
+  maxAutoDiscountAmount = Number(maxAutoDiscountAmount.toFixed(2));
+  const minAutoAcceptedTotal = Number(Math.max(1, subtotal - maxAutoDiscountAmount).toFixed(2));
+  const effectiveMaxDiscountPercent =
+    subtotal > 0 ? Math.round((maxAutoDiscountAmount / subtotal) * 100) : 0;
+
+  return {
+    subtotal,
+    maxAutoDiscountAmount,
+    minAutoAcceptedTotal,
+    effectiveMaxDiscountPercent,
+    hasAutoAcceptEnabled: maxAutoDiscountAmount > 0,
+  };
+}
+
+export function evaluateOfferAgainstPolicy(
+  subtotal: number,
+  proposedTotal: number,
+  maxAutoDiscountAmount: number
+): 'auto_approve' | 'requires_seller_review' | 'invalid' {
+  if (!Number.isFinite(proposedTotal) || proposedTotal <= 0 || proposedTotal > subtotal) {
+    return 'invalid';
+  }
+  if (maxAutoDiscountAmount <= 0) {
+    return 'requires_seller_review';
+  }
+  const minAutoAcceptedTotal = Math.max(1, subtotal - maxAutoDiscountAmount);
+  if (proposedTotal >= minAutoAcceptedTotal - 0.01) {
+    return 'auto_approve';
+  }
+  return 'requires_seller_review';
+}
+
 export interface PostalFreightOption {
   code: string;
   name: string;

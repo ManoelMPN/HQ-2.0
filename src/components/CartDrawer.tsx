@@ -21,7 +21,7 @@ import {
   FileText,
   Search,
 } from 'lucide-react';
-import { CartItem, Order } from '../types.ts';
+import { CartItem, DiscountProposal, Order } from '../types.ts';
 import { formatBRL, calculateAccurateFreight, PostalFreightOption } from '../utils/comicLogic.ts';
 
 interface CartDrawerProps {
@@ -34,6 +34,8 @@ interface CartDrawerProps {
   onOrderCreated: (order: Order) => void;
   storePixKey?: string;
   sellerOriginCep?: string;
+  approvedProposal?: DiscountProposal | null;
+  onClearApprovedProposal?: () => void;
 }
 
 const MIN_ORDER_VALUE = 30.0;
@@ -48,6 +50,8 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
   onOrderCreated,
   storePixKey = 'neto.mmp@gmail.com',
   sellerOriginCep = '01310-100',
+  approvedProposal = null,
+  onClearApprovedProposal,
 }) => {
   // Checkout Steps: 'cart' -> 'address' -> 'payment' -> 'confirmed'
   const [checkoutStep, setCheckoutStep] = useState<'cart' | 'address' | 'payment' | 'confirmed'>('cart');
@@ -80,10 +84,24 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
 
   const subtotal = cart.reduce((acc, item) => acc + item.hq.price * item.quantity, 0);
   const totalItemsCount = cart.reduce((acc, item) => acc + item.quantity, 0);
-  const isMinimumOrderMet = subtotal >= MIN_ORDER_VALUE;
+  const negotiatedDiscount =
+    approvedProposal && approvedProposal.status === 'approved'
+      ? Math.max(0, Math.min(subtotal - 1, approvedProposal.originalTotal - approvedProposal.proposedTotal))
+      : 0;
+  const discountedSubtotal = Math.max(0, subtotal - negotiatedDiscount);
+  const isMinimumOrderMet = subtotal >= MIN_ORDER_VALUE || Boolean(approvedProposal && approvedProposal.status === 'approved');
   const remainingToMinOrder = Math.max(0, MIN_ORDER_VALUE - subtotal);
   const shippingCost = selectedShipping?.price || 0;
-  const finalTotal = subtotal + shippingCost;
+  const finalTotal = Math.max(1, discountedSubtotal + shippingCost);
+
+  // Pre-fill buyer details when opening from an approved proposal link
+  useEffect(() => {
+    if (approvedProposal && approvedProposal.status === 'approved') {
+      if (approvedProposal.buyerName && !buyerName) setBuyerName(approvedProposal.buyerName);
+      if (approvedProposal.buyerEmail && !buyerEmail) setBuyerEmail(approvedProposal.buyerEmail);
+      if (approvedProposal.buyerPhone && !buyerPhone) setBuyerPhone(approvedProposal.buyerPhone);
+    }
+  }, [approvedProposal?.id]);
 
   // Reset steps when closed
   useEffect(() => {
@@ -212,7 +230,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
       shippingMethod: (selectedShipping?.code as any) || 'PAC',
       shippingCost,
       subtotal,
-      discount: 0,
+      discount: negotiatedDiscount,
       total: finalTotal,
       paymentMethod,
       pixCopiaECola: `00020126580014BR.GOV.BCB.PIX0136${storePixKey}520400005303986540${finalTotal.toFixed(2)}5802BR5915HQ MASTER COMICS6009SAO PAULO62070503***6304`,
@@ -250,6 +268,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
             state: buyerState,
           },
           shippingCost,
+          discount: negotiatedDiscount,
           storePixKey,
         }),
       });
@@ -266,6 +285,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
       setCreatedOrder(newOrder);
       onOrderCreated(newOrder);
       onClearCart();
+      onClearApprovedProposal?.();
       setCheckoutStep('confirmed');
       setProcessingPayment(false);
     }
@@ -399,25 +419,48 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                       ))}
                     </div>
 
-                    {/* Bundle Discount Button */}
-                    {cart.length >= 2 && (
-                      <div className="bg-gradient-to-r from-purple-950/40 via-zinc-900 to-purple-950/40 border border-purple-800/40 rounded-2xl p-3 text-xs flex items-center justify-between gap-2">
+                    {/* Approved Discount Notice or Negotiation Trigger (Works for 1 unit, lot, or bundle) */}
+                    {negotiatedDiscount > 0 ? (
+                      <div className="bg-emerald-950/35 border border-emerald-600/50 rounded-2xl p-3 text-xs flex items-center justify-between gap-2">
                         <div>
-                          <div className="flex items-center gap-1.5 font-bold text-purple-300">
-                            <MessageSquareQuote className="w-4 h-4" />
-                            Desconto para Pacote ({cart.length} HQs)
+                          <div className="flex items-center gap-1.5 font-bold text-emerald-300">
+                            <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                            Desconto Aprovado Aplicado!
                           </div>
-                          <span className="text-[11px] text-zinc-400">
-                            Faça uma proposta de valor para o lote.
+                          <span className="text-[11px] text-zinc-300">
+                            Economia de <strong className="text-emerald-400">{formatBRL(negotiatedDiscount)}</strong> liberada para pagamento.
                           </span>
                         </div>
-                        <button
-                          onClick={onOpenNegotiation}
-                          className="bg-purple-600 hover:bg-purple-500 text-white font-bold px-3 py-1.5 rounded-lg text-xs shrink-0 transition-colors"
-                        >
-                          Pedir Desconto
-                        </button>
+                        {onClearApprovedProposal && (
+                          <button
+                            type="button"
+                            onClick={onClearApprovedProposal}
+                            className="text-[11px] text-zinc-400 hover:text-white underline shrink-0"
+                          >
+                            Remover
+                          </button>
+                        )}
                       </div>
+                    ) : (
+                      cart.length >= 1 && (
+                        <div className="bg-gradient-to-r from-purple-950/40 via-zinc-900 to-purple-950/40 border border-purple-800/40 rounded-2xl p-3 text-xs flex items-center justify-between gap-2">
+                          <div>
+                            <div className="flex items-center gap-1.5 font-bold text-purple-300">
+                              <MessageSquareQuote className="w-4 h-4" />
+                              {cart.length === 1 ? 'Negociar Desconto neste Item' : `Desconto para Pacote (${cart.length} HQs)`}
+                            </div>
+                            <span className="text-[11px] text-zinc-400">
+                              Ofertas dentro da margem da loja são aceitas na hora!
+                            </span>
+                          </div>
+                          <button
+                            onClick={onOpenNegotiation}
+                            className="bg-purple-600 hover:bg-purple-500 text-white font-bold px-3 py-1.5 rounded-lg text-xs shrink-0 transition-colors"
+                          >
+                            Pedir Desconto
+                          </button>
+                        </div>
+                      )
                     )}
                   </>
                 )}
@@ -857,6 +900,12 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                   <span>Subtotal ({totalItemsCount} HQs):</span>
                   <span className="text-white font-medium">{formatBRL(subtotal)}</span>
                 </div>
+                {negotiatedDiscount > 0 && (
+                  <div className="flex justify-between text-emerald-400 font-semibold">
+                    <span>Desconto Aprovado:</span>
+                    <span>- {formatBRL(negotiatedDiscount)}</span>
+                  </div>
+                )}
                 {shippingCost > 0 && (
                   <div className="flex justify-between text-zinc-400">
                     <span>Frete ({selectedShipping?.name}):</span>

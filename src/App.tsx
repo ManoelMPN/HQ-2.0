@@ -138,6 +138,7 @@ export default function App() {
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [isPartnerModalOpen, setIsPartnerModalOpen] = useState(false);
   const [isNegotiationOpen, setIsNegotiationOpen] = useState(false);
+  const [approvedProposal, setApprovedProposal] = useState<DiscountProposal | null>(null);
 
   // Supabase Cloud Sync Status
   const [supabaseStatus, setSupabaseStatus] = useState<{
@@ -312,6 +313,29 @@ export default function App() {
     }
   }, []);
 
+  // Load approved discount proposal automatically if user opened /?proposta=<id>
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    const propId = params.get('proposta');
+    if (!propId) return;
+
+    const found = proposals.find((p) => p.id === propId && p.status === 'approved');
+    if (!found) return;
+
+    const matchingHQs = found.itemIds
+      .map((id) => hqs.find((h) => h.id === id))
+      .filter((h): h is HQItem => Boolean(h));
+
+    if (matchingHQs.length > 0) {
+      setCart(matchingHQs.map((hq) => ({ hq, quantity: 1 })));
+      setApprovedProposal(found);
+      setIsCartOpen(true);
+      const cleanUrl = `${window.location.pathname}#loja`;
+      window.history.replaceState({}, '', cleanUrl);
+    }
+  }, [proposals, hqs]);
+
   // Derived data for dynamic filters
   const availablePublishers = Array.from(new Set(hqs.map((h) => h.publisher))).sort();
   const availableFranchises = Array.from(new Set(hqs.map((h) => h.franchiseCategory))).sort();
@@ -355,11 +379,22 @@ export default function App() {
   };
 
   const handleUpdateHQ = (updated: HQItem) => {
-    setHqs((prev) => prev.map((h) => (h.id === updated.id ? updated : h)));
-    void upsertHQToSupabase(updated);
+    const existing = hqs.find((h) => h.id === updated.id);
+    if (currentSeller && currentSeller.role !== 'master' && existing && existing.sellerId !== currentSeller.id) {
+      alert('Você só tem permissão para editar os seus próprios anúncios.');
+      return;
+    }
+    const sanitized: HQItem = { ...updated, sellerAddress: '', sellerCep: '' };
+    setHqs((prev) => prev.map((h) => (h.id === sanitized.id ? sanitized : h)));
+    void upsertHQToSupabase(sanitized);
   };
 
   const handleDeleteHQ = (id: string) => {
+    const existing = hqs.find((h) => h.id === id);
+    if (currentSeller && currentSeller.role !== 'master' && existing && existing.sellerId !== currentSeller.id) {
+      alert('Você só tem permissão para remover os seus próprios anúncios.');
+      return;
+    }
     setHqs((prev) => prev.filter((h) => h.id !== id));
     void deleteHQFromSupabase(id);
   };
@@ -454,42 +489,118 @@ export default function App() {
     setCurrentSeller(null);
   };
 
+  const handleUpdateSellerMaxDiscount = (sellerId: string, maxDiscountPercent: number) => {
+    const clamped = Math.max(0, Math.min(80, Number.isFinite(maxDiscountPercent) ? maxDiscountPercent : 0));
+    let updatedRef: Seller | null = null;
+    setSellers((prev) =>
+      prev.map((s) => {
+        if (s.id === sellerId) {
+          updatedRef = { ...s, maxDiscountPercent: clamped };
+          return updatedRef;
+        }
+        return s;
+      })
+    );
+    if (currentSeller && currentSeller.id === sellerId) {
+      setCurrentSeller((prev) => (prev ? { ...prev, maxDiscountPercent: clamped } : null));
+    }
+    if (updatedRef) {
+      void upsertSellerToSupabase(updatedRef);
+    }
+  };
+
   // Proposal Management
-  const handleSubmitProposal = (data: Omit<DiscountProposal, 'id' | 'createdAt' | 'status' | 'sellerApprovals'>) => {
-    const involvedSellerIds = Array.from(new Set(data.itemsSummary.map((i) => i.sellerId)));
+  const handleSubmitProposal = (
+    data: Omit<DiscountProposal, 'id' | 'createdAt' | 'status' | 'sellerApprovals'>,
+    autoApprove = false
+  ): DiscountProposal => {
+    const id = `prop-${Date.now()}`;
+    const involvedSellerIds = Array.from(new Set(data.itemsSummary.map((i) => i.sellerId || 'master')));
     const initialApprovals: Record<string, 'pending' | 'accepted' | 'declined'> = {};
     involvedSellerIds.forEach((sId) => {
-      initialApprovals[sId] = 'pending';
+      initialApprovals[sId] = autoApprove ? 'accepted' : 'pending';
     });
+
+    const origin = typeof window !== 'undefined' ? window.location.origin : '';
+    const master = sellers.find((s) => s.role === 'master') || sellers[0];
+    const pixKey = master?.pixKey || 'neto.mmp@gmail.com';
+    const paymentLink = autoApprove && origin ? `${origin}/?proposta=${id}#loja` : '';
+    const pixCopiaECola = autoApprove
+      ? `00020126580014BR.GOV.BCB.PIX0136${pixKey}520400005303986540${Number(data.proposedTotal).toFixed(2)}5802BR5915HQ MASTER COMICS6009SAO PAULO62070503***6304`
+      : '';
 
     const newProposal: DiscountProposal = {
       ...data,
-      id: `prop-${Date.now()}`,
+      id,
       sellerApprovals: initialApprovals,
-      status: 'pending',
+      status: autoApprove ? 'approved' : 'pending',
+      autoApproved: autoApprove,
+      discountAmount: Number(Math.max(0, data.originalTotal - data.proposedTotal).toFixed(2)),
+      paymentLink,
+      pixCopiaECola,
       createdAt: new Date().toISOString(),
     };
 
     setProposals((prev) => [newProposal, ...prev]);
     void upsertProposalToSupabase(newProposal);
+    return newProposal;
   };
 
-  const handleUpdateProposalApproval = (proposalId: string, sellerId: string, decision: 'accepted' | 'declined') => {
+  const handleUpdateProposalApproval = (
+    proposalId: string,
+    sellerId: string,
+    decision: 'accepted' | 'declined',
+    forceMasterOverride = false
+  ) => {
+    const actor = sellers.find((s) => s.id === sellerId);
+    const isMaster = actor?.role === 'master';
+    const origin = typeof window !== 'undefined' ? window.location.origin : '';
+    const master = sellers.find((s) => s.role === 'master') || sellers[0];
+    const pixKey = master?.pixKey || 'neto.mmp@gmail.com';
+
     let updatedProp: DiscountProposal | null = null;
     setProposals((prev) =>
       prev.map((prop) => {
         if (prop.id !== proposalId) return prop;
-        const updatedApprovals = { ...prop.sellerApprovals, [sellerId]: decision };
-        const values = Object.values(updatedApprovals);
 
+        const updatedApprovals = { ...(prop.sellerApprovals || {}) };
+        if (isMaster && (forceMasterOverride || Object.keys(updatedApprovals).length === 0 || !(sellerId in updatedApprovals))) {
+          // Master authorizing store-wide or partner-only proposal
+          const keys = Object.keys(updatedApprovals);
+          if (keys.length === 0) {
+            updatedApprovals[sellerId] = decision;
+          } else {
+            keys.forEach((k) => {
+              if (updatedApprovals[k] === 'pending' || k === sellerId) {
+                updatedApprovals[k] = decision;
+              }
+            });
+          }
+        } else {
+          updatedApprovals[sellerId] = decision;
+        }
+
+        const values = Object.values(updatedApprovals);
         let newStatus: 'pending' | 'approved' | 'rejected' = 'pending';
         if (values.some((v) => v === 'declined')) newStatus = 'rejected';
-        else if (values.every((v) => v === 'accepted')) newStatus = 'approved';
+        else if (values.length > 0 && values.every((v) => v === 'accepted')) newStatus = 'approved';
+
+        const paymentLink =
+          newStatus === 'approved'
+            ? prop.paymentLink || (origin ? `${origin}/?proposta=${prop.id}#loja` : '')
+            : prop.paymentLink;
+        const pixCopiaECola =
+          newStatus === 'approved'
+            ? prop.pixCopiaECola ||
+              `00020126580014BR.GOV.BCB.PIX0136${pixKey}520400005303986540${Number(prop.proposedTotal).toFixed(2)}5802BR5915HQ MASTER COMICS6009SAO PAULO62070503***6304`
+            : prop.pixCopiaECola;
 
         updatedProp = {
           ...prop,
           sellerApprovals: updatedApprovals,
           status: newStatus,
+          paymentLink,
+          pixCopiaECola,
         };
         return updatedProp;
       })
@@ -579,6 +690,7 @@ export default function App() {
         onDeleteSeller={handleDeleteSeller}
         onUpdateSellerPassword={handleUpdateSellerPassword}
         onUpdateOwnerProfile={handleUpdateOwnerProfile}
+        onUpdateSellerMaxDiscount={handleUpdateSellerMaxDiscount}
         currentSeller={currentSeller}
         onLoginSeller={handleLoginSeller}
         onLogoutSeller={handleLogoutSeller}
@@ -859,15 +971,23 @@ export default function App() {
         onOrderCreated={handleOrderCreated}
         storePixKey={masterSeller?.pixKey || 'neto.mmp@gmail.com'}
         sellerOriginCep={masterSeller?.cep || '01310-100'}
+        approvedProposal={approvedProposal}
+        onClearApprovedProposal={() => setApprovedProposal(null)}
       />
 
       <DiscountNegotiationModal
         isOpen={isNegotiationOpen}
         cart={cart}
+        sellers={sellers.map((s) => ({ id: s.id, maxDiscountPercent: s.maxDiscountPercent }))}
         subtotal={cart.reduce((acc, i) => acc + i.hq.price * i.quantity, 0)}
         distinctSellersCount={Array.from(new Set(cart.map((c) => c.hq.sellerId))).length}
         onClose={() => setIsNegotiationOpen(false)}
         onSubmitProposal={handleSubmitProposal}
+        onProceedToAutoApprovedCheckout={(prop) => {
+          setApprovedProposal(prop);
+          setIsNegotiationOpen(false);
+          setIsCartOpen(true);
+        }}
       />
 
       <PartnerOnboardingModal

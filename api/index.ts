@@ -340,7 +340,10 @@ app.post('/api/mercadopago/create-preference', async (req, res) => {
       0
     );
 
-    const total = Math.max(1, subtotal - discount + shippingCost);
+    const numericDiscount = Math.max(0, Number(discount) || 0);
+    const discountedSubtotal = Math.max(1, subtotal - numericDiscount);
+    const discountRatio = subtotal > 0 ? discountedSubtotal / subtotal : 1;
+    const total = Math.max(1, discountedSubtotal + Number(shippingCost || 0));
     const orderId = `HQM-${Date.now().toString().slice(-6)}`;
 
     const customMpToken = ((req.headers['x-mp-access-token'] as string) || '').trim();
@@ -351,8 +354,8 @@ app.post('/api/mercadopago/create-preference', async (req, res) => {
         const preferencePayload = {
           items: items.map((i: any) => ({
             id: i.id || i.hqId,
-            title: i.title,
-            unit_price: Number(i.price),
+            title: numericDiscount > 0 ? `${i.title} (c/ Desconto Negociado)` : i.title,
+            unit_price: Number((Number(i.price) * discountRatio).toFixed(2)),
             quantity: i.quantity || 1,
             currency_id: 'BRL',
           })),

@@ -8,6 +8,8 @@ import {
   filterHQs,
   calculateCartTotals,
   evaluateProposalStatus,
+  calculateAutoDiscountLimit,
+  evaluateOfferAgainstPolicy,
   calculateAccurateFreight,
   MIN_ORDER_VALUE,
 } from './comicLogic.ts';
@@ -206,4 +208,39 @@ test('calculateAccurateFreight calculates postal costs based on Brazilian CEP zo
   assert.ok(nordeste);
   assert.ok(nordeste[0].price > 30);
 });
+
+test('calculateAutoDiscountLimit and evaluateOfferAgainstPolicy handle store and per-item max discounts', () => {
+  const sellers = [
+    { id: 'master', maxDiscountPercent: 10 },
+    { id: 'partner-1', maxDiscountPercent: 15 },
+  ];
+
+  // Store-wide fallback: 10% of 100 = 10 -> min auto-accepted = 90
+  const cartStoreDefault: CartItem[] = [
+    { hq: { ...mockHQs[0], price: 100, maxDiscountPercent: null }, quantity: 1 },
+  ];
+  const limit1 = calculateAutoDiscountLimit(cartStoreDefault, sellers);
+  assert.equal(limit1.maxAutoDiscountAmount, 10);
+  assert.equal(limit1.minAutoAcceptedTotal, 90);
+  assert.equal(evaluateOfferAgainstPolicy(100, 92, limit1.maxAutoDiscountAmount), 'auto_approve');
+  assert.equal(evaluateOfferAgainstPolicy(100, 85, limit1.maxAutoDiscountAmount), 'requires_seller_review');
+
+  // Per-item override: 20% overrides store 10%
+  const cartItemOverride: CartItem[] = [
+    { hq: { ...mockHQs[0], price: 100, maxDiscountPercent: 20 }, quantity: 1 },
+  ];
+  const limit2 = calculateAutoDiscountLimit(cartItemOverride, sellers);
+  assert.equal(limit2.maxAutoDiscountAmount, 20);
+  assert.equal(evaluateOfferAgainstPolicy(100, 80, limit2.maxAutoDiscountAmount), 'auto_approve');
+  assert.equal(evaluateOfferAgainstPolicy(100, 75, limit2.maxAutoDiscountAmount), 'requires_seller_review');
+
+  // Zero discount limit forces seller review
+  const limitZero = calculateAutoDiscountLimit(
+    [{ hq: { ...mockHQs[0], price: 100, maxDiscountPercent: 0 }, quantity: 1 }],
+    sellers
+  );
+  assert.equal(limitZero.hasAutoAcceptEnabled, false);
+  assert.equal(evaluateOfferAgainstPolicy(100, 95, limitZero.maxAutoDiscountAmount), 'requires_seller_review');
+});
+
 
