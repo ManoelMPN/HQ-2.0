@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { X, CheckCircle, ShieldCheck, HeartHandshake, Layers, Sparkles, Store, MapPin, Calendar, ShoppingBag, ChevronLeft, ChevronRight } from 'lucide-react';
+import { X, CheckCircle, ShieldCheck, HeartHandshake, Layers, Sparkles, Store, Calendar, ShoppingBag, ChevronLeft, ChevronRight } from 'lucide-react';
 import { HQItem } from '../types.ts';
 import { formatBRL, getConditionInfo } from '../utils/comicLogic.ts';
 
@@ -203,8 +203,8 @@ export const HQDetailModal: React.FC<HQDetailModalProps> = ({
                 </div>
               </div>
 
-              {/* Seller attribution and Shipping location */}
-              <div className="flex items-center justify-between bg-zinc-900/60 p-3 rounded-xl border border-zinc-800 text-xs text-zinc-400">
+              {/* Seller attribution (name only, no personal/address data) */}
+              <div className="flex items-center bg-zinc-900/60 p-3 rounded-xl border border-zinc-800 text-xs text-zinc-400">
                 <div className="flex items-center gap-2">
                   <Store className="w-4 h-4 text-amber-400" />
                   <div>
@@ -212,13 +212,6 @@ export const HQDetailModal: React.FC<HQDetailModalProps> = ({
                     <strong className="text-zinc-100">{hq.sellerName}</strong>
                   </div>
                 </div>
-
-                {hq.sellerAddress && (
-                  <div className="flex items-center gap-1 text-[11px] text-zinc-400">
-                    <MapPin className="w-3.5 h-3.5 text-zinc-500" />
-                    <span>{hq.sellerAddress}</span>
-                  </div>
-                )}
               </div>
             </div>
 

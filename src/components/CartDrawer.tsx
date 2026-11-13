@@ -737,7 +737,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                     </div>
 
                     <div className="space-y-1.5">
-                      <label className="text-[11px] text-zinc-400 block">Chave Pix (E-mail do Proprietário):</label>
+                      <label className="text-[11px] text-zinc-400 block">Chave Pix da Loja:</label>
                       <div className="flex items-center gap-1.5 bg-zinc-950 p-2 rounded-xl border border-zinc-800">
                         <code className="text-xs text-amber-300 font-mono flex-1 truncate text-left">
                           {storePixKey}

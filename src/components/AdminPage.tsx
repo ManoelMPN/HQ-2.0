@@ -575,8 +575,8 @@ export const AdminPage: React.FC<AdminPageProps> = ({
       images: formImages,
       sellerId: formSellerId,
       sellerName: currentPublisher?.storeName || currentPublisher?.name || 'HQ Master',
-      sellerAddress: currentPublisher?.address || 'São Paulo - SP',
-      sellerCep: currentPublisher?.cep || '01310-100',
+      sellerAddress: '',
+      sellerCep: '',
       featured: true,
       sold: false,
     });

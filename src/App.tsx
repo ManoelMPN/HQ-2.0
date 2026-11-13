@@ -53,7 +53,9 @@ export default function App() {
   const [hqs, setHqs] = useState<HQItem[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_HQS);
-      return saved ? JSON.parse(saved) : INITIAL_HQS;
+      if (!saved) return INITIAL_HQS;
+      const parsed = JSON.parse(saved) as HQItem[];
+      return parsed.map((h) => ({ ...h, sellerAddress: '', sellerCep: '' }));
     } catch {
       return INITIAL_HQS;
     }
@@ -728,7 +730,7 @@ export default function App() {
           }
           availablePublishers={availablePublishers}
           availableFranchises={availableFranchises}
-          sellers={sellers}
+          sellers={sellers.map((s) => ({ id: s.id, name: s.name, storeName: s.storeName }))}
           totalResultsCount={filteredHQs.length}
         />
 

@@ -8,7 +8,7 @@ interface ComicFiltersProps {
   onResetFilters: () => void;
   availablePublishers: string[];
   availableFranchises: string[];
-  sellers: Seller[];
+  sellers: Pick<Seller, 'id' | 'name' | 'storeName'>[];
   totalResultsCount: number;
 }
 
@@ -181,7 +181,7 @@ export const ComicFilters: React.FC<ComicFiltersProps> = ({
             <option value="all">Todos os Vendedores</option>
             {sellers.map((s) => (
               <option key={s.id} value={s.id}>
-                {s.storeName} ({s.role === 'master' ? 'Mestre' : 'Parceiro'})
+                {s.storeName || s.name}
               </option>
             ))}
           </select>
