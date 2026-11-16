@@ -4,15 +4,15 @@ export interface HQItem {
   id: string;
   title: string;
   description: string;
-  publisher: 'Marvel' | 'DC Comics' | 'Panini' | 'Editora Abril' | 'Image Comics' | 'Dark Horse' | 'Outra';
+  publisher: string;
   series: string;
-  franchiseCategory: string; // e.g. "Homem-Aranha", "Batman", "Superman", "Justiceiro", etc.
+  franchiseCategory: string; // e.g. "Homem-Aranha", "Batman", "Literatura", "Action Figures", etc.
   issueNumber: string;
   year: number;
   condition: ConditionGrade;
   conditionDetails?: string;
-  hasAllPages: boolean; // Always true as requested
-  cleaningNote: string; // "Limpa exclusivamente com pano seco e macio"
+  hasAllPages: boolean;
+  cleaningNote: string;
   price: number;
   unitPrice?: number;
   bundlePrice?: number;
@@ -33,12 +33,21 @@ export interface HQItem {
   createdAt: string;
 }
 
+export type CheckoutProvider =
+  | 'mercadopago'
+  | 'pagseguro'
+  | 'asaas'
+  | 'efipay'
+  | 'stripe'
+  | 'pix_direto';
+
 export interface Seller {
   id: string;
   name: string;
   storeName: string;
   email: string;
   role: 'master' | 'partner';
+  approvalStatus?: 'pending' | 'approved';
   password?: string;
   phone?: string;
   cpfCnpj?: string;
@@ -55,6 +64,11 @@ export interface Seller {
   bankName?: string;
   accountHolder?: string;
   maxDiscountPercent?: number;
+  checkoutProvider?: CheckoutProvider;
+  checkoutPublicKey?: string;
+  checkoutApiKey?: string;
+  checkoutUrl?: string;
+  geminiApiKey?: string;
   totalSales: number;
   totalEarnings: number;
   active: boolean;
@@ -143,7 +157,7 @@ export interface FilterState {
 
 export interface AICoverAnalysisResult {
   title: string;
-  publisher: 'Marvel' | 'DC Comics' | 'Panini' | 'Editora Abril' | 'Image Comics' | 'Dark Horse' | 'Outra';
+  publisher: string;
   series: string;
   franchiseCategory: string;
   issueNumber: string;

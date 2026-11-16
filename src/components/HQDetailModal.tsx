@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { X, CheckCircle, Layers, Sparkles, Store, ShoppingBag, ChevronLeft, ChevronRight, Check } from 'lucide-react';
+import { X, CheckCircle, Layers, Sparkles, Store, ShoppingBag, ChevronLeft, ChevronRight, Check, BookOpen } from 'lucide-react';
 import { HQItem } from '../types.ts';
-import { formatBRL, getConditionInfo, parseIssueNumbersFromRange } from '../utils/comicLogic.ts';
+import { formatBRL, formatIssueLabel, getConditionInfo, parseIssueNumbersFromRange } from '../utils/comicLogic.ts';
 
 interface HQDetailModalProps {
   hq: HQItem | null;
@@ -19,20 +19,29 @@ export const HQDetailModal: React.FC<HQDetailModalProps> = ({
   const [activePhotoIdx, setActivePhotoIdx] = useState(0);
   const [purchaseMode, setPurchaseMode] = useState<'lot' | 'unit'>('lot');
   const [selectedIssues, setSelectedIssues] = useState<string[]>([]);
+  const [imgError, setImgError] = useState(false);
 
   useEffect(() => {
     setActivePhotoIdx(0);
     setPurchaseMode('lot');
     setSelectedIssues([]);
+    setImgError(false);
   }, [hq?.id]);
 
   if (!hq) return null;
 
   const conditionMeta = getConditionInfo(hq.condition);
-  const images = hq.images.length > 0 ? hq.images : ['https://images.unsplash.com/photo-1601645191163-3fc0d5d34e35?auto=format&fit=crop&w=800&q=80'];
+  const images = hq.images && hq.images.length > 0 ? hq.images : [];
+  const issueLabel = formatIssueLabel(hq.issueNumber);
 
-  const nextPhoto = () => setActivePhotoIdx((prev) => (prev + 1) % images.length);
-  const prevPhoto = () => setActivePhotoIdx((prev) => (prev - 1 + images.length) % images.length);
+  const nextPhoto = () => {
+    setImgError(false);
+    setActivePhotoIdx((prev) => (prev + 1) % images.length);
+  };
+  const prevPhoto = () => {
+    setImgError(false);
+    setActivePhotoIdx((prev) => (prev - 1 + images.length) % images.length);
+  };
 
   const canSelectAvulso = Boolean(hq.isCollection && hq.allowsUnitPurchase && hq.unitPrice && hq.unitPrice > 0);
   const soldSet = new Set(hq.soldIssues || []);
@@ -58,31 +67,40 @@ export const HQDetailModal: React.FC<HQDetailModalProps> = ({
     !hq.isCollection || purchaseMode === 'lot' || (purchaseMode === 'unit' && selectedIssues.length > 0);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-black/85 backdrop-blur-md animate-in fade-in duration-200">
-      <div className="bg-[#0f121a] border border-zinc-800 rounded-3xl w-full max-w-4xl max-h-[92vh] overflow-y-auto shadow-2xl relative flex flex-col">
-        {/* Close Button */}
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-2.5 sm:p-5 bg-black/75 backdrop-blur-md">
+      <div className="bg-[var(--gg-surface)] border border-[var(--gg-border)] rounded-2xl sm:rounded-3xl w-full max-w-4xl max-h-[92vh] overflow-y-auto shadow-2xl relative flex flex-col">
         <button
+          type="button"
           onClick={onClose}
           aria-label="Fechar modal"
-          className="absolute top-4 right-4 z-20 w-9 h-9 rounded-full bg-zinc-900/90 hover:bg-zinc-800 text-zinc-400 hover:text-white border border-zinc-700 flex items-center justify-center transition-colors"
+          className="absolute top-3.5 right-3.5 sm:top-4 sm:right-4 z-20 w-9 h-9 rounded-full bg-[var(--gg-surface-2)] hover:opacity-85 text-[var(--gg-text-muted)] hover:text-[var(--gg-text-strong)] border border-[var(--gg-border)] flex items-center justify-center transition-colors"
         >
           <X className="w-5 h-5" />
         </button>
 
-        {/* Content Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-12 gap-6 p-5 sm:p-7">
+        <div className="grid grid-cols-1 md:grid-cols-12 gap-5 sm:gap-6 p-4 sm:p-7">
           {/* Photos Gallery Column */}
           <div className="md:col-span-5 flex flex-col gap-3">
-            <div className="relative aspect-[3/4] w-full rounded-2xl overflow-hidden bg-black border border-zinc-800 shadow-xl group">
-              <img
-                src={images[activePhotoIdx]}
-                alt={`${hq.title} - Foto ${activePhotoIdx + 1}`}
-                className="w-full h-full object-contain"
-              />
+            <div className="relative aspect-[3/4] w-full rounded-2xl overflow-hidden bg-[var(--gg-surface-inset)] border border-[var(--gg-border)]">
+              {images.length > 0 && !imgError ? (
+                <img
+                  src={images[activePhotoIdx]}
+                  alt={`${hq.title} - Foto ${activePhotoIdx + 1}`}
+                  referrerPolicy="no-referrer"
+                  onError={() => setImgError(true)}
+                  className="w-full h-full object-contain"
+                />
+              ) : (
+                <div className="w-full h-full flex flex-col items-center justify-center gap-2 text-[var(--gg-text-subtle)] p-6 text-center">
+                  <BookOpen className="w-10 h-10 opacity-60" />
+                  <span className="text-xs">{hq.title}</span>
+                </div>
+              )}
 
               {images.length > 1 && (
                 <>
                   <button
+                    type="button"
                     onClick={prevPhoto}
                     aria-label="Foto anterior"
                     className="absolute left-2 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-black/70 hover:bg-black text-white flex items-center justify-center transition-opacity"
@@ -90,6 +108,7 @@ export const HQDetailModal: React.FC<HQDetailModalProps> = ({
                     <ChevronLeft className="w-4 h-4" />
                   </button>
                   <button
+                    type="button"
                     onClick={nextPhoto}
                     aria-label="Próxima foto"
                     className="absolute right-2 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-black/70 hover:bg-black text-white flex items-center justify-center transition-opacity"
@@ -99,35 +118,41 @@ export const HQDetailModal: React.FC<HQDetailModalProps> = ({
                 </>
               )}
 
-              <div className="absolute bottom-2.5 right-2.5 bg-black/80 backdrop-blur-md text-amber-300 text-xs px-2.5 py-1 rounded-full font-bold border border-amber-500/30">
-                {activePhotoIdx + 1} de {images.length} fotos
-              </div>
+              {images.length > 0 && (
+                <div className="absolute bottom-2.5 right-2.5 bg-black/80 backdrop-blur-md text-zinc-200 text-xs px-2.5 py-1 rounded-lg font-medium border border-zinc-700 tabular-nums">
+                  {activePhotoIdx + 1} de {images.length}
+                </div>
+              )}
             </div>
 
             {images.length > 1 && (
-              <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-thin">
+              <div className="flex gap-2 overflow-x-auto pb-1">
                 {images.map((img, idx) => (
                   <button
+                    type="button"
                     key={idx}
-                    onClick={() => setActivePhotoIdx(idx)}
+                    onClick={() => {
+                      setImgError(false);
+                      setActivePhotoIdx(idx);
+                    }}
                     className={`w-14 h-18 rounded-lg overflow-hidden border-2 shrink-0 transition-all ${
                       idx === activePhotoIdx
-                        ? 'border-amber-500 scale-105'
-                        : 'border-zinc-800 opacity-60 hover:opacity-100'
+                        ? 'border-amber-500'
+                        : 'border-[var(--gg-border)] opacity-60 hover:opacity-100'
                     }`}
                   >
-                    <img src={img} alt={`Miniatura ${idx + 1}`} className="w-full h-full object-cover" />
+                    <img src={img} alt={`Miniatura ${idx + 1}`} referrerPolicy="no-referrer" className="w-full h-full object-cover" />
                   </button>
                 ))}
               </div>
             )}
 
-            <div className="bg-emerald-950/40 border border-emerald-800/50 rounded-xl p-3 text-xs text-emerald-300 flex items-center gap-2.5">
-              <CheckCircle className="w-5 h-5 text-emerald-400 shrink-0" />
+            <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-xl p-3 text-xs text-[var(--gg-emerald-text)] flex items-center gap-2.5">
+              <CheckCircle className="w-5 h-5 shrink-0" />
               <div>
-                <strong className="block font-semibold">Garantia 100% Páginas Completas</strong>
-                <span className="text-zinc-300 text-[11px]">
-                  Sem páginas faltantes, miolo íntegro para leitura integral.
+                <strong className="block font-semibold">Procedência Verificada</strong>
+                <span className="text-[var(--gg-text-muted)] text-[11px]">
+                  Item conferido integralmente antes do envio.
                 </span>
               </div>
             </div>
@@ -136,49 +161,51 @@ export const HQDetailModal: React.FC<HQDetailModalProps> = ({
           {/* Details Column */}
           <div className="md:col-span-7 flex flex-col justify-between space-y-4">
             <div>
-              <div className="flex flex-wrap items-center gap-2 mb-2">
-                <span className="text-xs font-black uppercase tracking-wider bg-zinc-800 text-amber-300 px-2.5 py-1 rounded-lg border border-zinc-700">
+              <div className="flex flex-wrap items-center gap-2 text-xs text-[var(--gg-text-muted)] mb-2 pr-8">
+                <span className="font-semibold text-[var(--gg-text-strong)] uppercase tracking-wide">
                   {hq.publisher}
                 </span>
-
-                <span className="text-xs font-bold bg-amber-500/10 text-amber-300 px-2.5 py-1 rounded-lg border border-amber-500/30 flex items-center gap-1">
-                  <Sparkles className="w-3.5 h-3.5" /> Coleção: {hq.franchiseCategory}
+                <span className="opacity-50">·</span>
+                <span className="text-[var(--gg-accent-text)] font-medium flex items-center gap-1">
+                  <Sparkles className="w-3.5 h-3.5" /> {hq.franchiseCategory}
                 </span>
-
                 {hq.isCollection && (
-                  <span className="text-xs font-black bg-indigo-600 text-white px-2.5 py-1 rounded-lg shadow flex items-center gap-1">
-                    <Layers className="w-3.5 h-3.5" /> Lote ({hq.collectionCount} revistas)
-                  </span>
+                  <>
+                    <span className="opacity-50">·</span>
+                    <span className="text-[var(--gg-text-strong)] font-semibold flex items-center gap-1 tabular-nums">
+                      <Layers className="w-3.5 h-3.5 text-[var(--gg-accent-text)]" /> Lote ({hq.collectionCount} itens)
+                    </span>
+                  </>
                 )}
               </div>
 
-              <h2 className="text-xl sm:text-2xl font-black text-white font-['Space_Grotesk'] leading-tight mb-2">
+              <h2 className="font-display text-lg sm:text-2xl font-bold text-[var(--gg-text-strong)] leading-tight mb-3">
                 {hq.title}
               </h2>
 
-              <div className="grid grid-cols-2 gap-2 text-xs text-zinc-300 mb-4 bg-zinc-900/60 p-3 rounded-xl border border-zinc-800">
-                <div>
-                  <span className="text-zinc-500 block text-[10px] uppercase font-semibold">Série / Título</span>
-                  <span className="font-medium text-white">{hq.series}</span>
+              <div className="grid grid-cols-2 gap-2.5 text-xs text-[var(--gg-text)] mb-4 bg-[var(--gg-surface-inset)] p-3.5 rounded-xl border border-[var(--gg-border)]">
+                <div className="min-w-0">
+                  <span className="text-[var(--gg-text-subtle)] block text-[10px] uppercase font-semibold">Série / Linha</span>
+                  <span className="font-medium text-[var(--gg-text-strong)] break-words">{hq.series}</span>
+                </div>
+                <div className="min-w-0">
+                  <span className="text-[var(--gg-text-subtle)] block text-[10px] uppercase font-semibold">Edição / Modelo</span>
+                  <span className="font-medium text-[var(--gg-text-strong)] font-mono break-words">{issueLabel}</span>
                 </div>
                 <div>
-                  <span className="text-zinc-500 block text-[10px] uppercase font-semibold">Edição / Número</span>
-                  <span className="font-medium text-white">{hq.issueNumber.startsWith('#') ? hq.issueNumber : `#${hq.issueNumber}`}</span>
+                  <span className="text-[var(--gg-text-subtle)] block text-[10px] uppercase font-semibold">Ano</span>
+                  <span className="font-medium text-[var(--gg-text-strong)] tabular-nums">{hq.year}</span>
                 </div>
                 <div>
-                  <span className="text-zinc-500 block text-[10px] uppercase font-semibold">Ano de Lançamento</span>
-                  <span className="font-medium text-white">{hq.year}</span>
-                </div>
-                <div>
-                  <span className="text-zinc-500 block text-[10px] uppercase font-semibold">Integridade</span>
-                  <span className="font-medium text-emerald-400">100% Páginas Completas</span>
+                  <span className="text-[var(--gg-text-subtle)] block text-[10px] uppercase font-semibold">Integridade</span>
+                  <span className="font-medium text-[var(--gg-emerald-text)]">100% Conferido</span>
                 </div>
               </div>
 
               {/* Unit vs Collection Option Selector */}
               {hq.isCollection && (
-                <div className="p-3.5 bg-amber-500/10 rounded-2xl border border-amber-500/30 text-xs space-y-3 mb-4">
-                  <span className="font-bold text-amber-300 block">
+                <div className="p-3.5 bg-[var(--gg-surface-inset)] rounded-2xl border border-amber-500/35 text-xs space-y-3 mb-4">
+                  <span className="font-bold text-[var(--gg-accent-text)] block">
                     Escolha como deseja comprar:
                   </span>
 
@@ -188,19 +215,19 @@ export const HQDetailModal: React.FC<HQDetailModalProps> = ({
                       onClick={() => setPurchaseMode('lot')}
                       className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
                         purchaseMode === 'lot'
-                          ? 'bg-zinc-950 border-amber-400 ring-2 ring-amber-500/30 shadow-md'
-                          : 'bg-zinc-950/60 border-zinc-800 hover:border-zinc-600 opacity-80'
+                          ? 'bg-[var(--gg-surface)] border-amber-500 ring-1 ring-amber-500/40'
+                          : 'bg-[var(--gg-surface-2)] border-[var(--gg-border)] opacity-80'
                       }`}
                     >
                       <div className="flex items-center justify-between mb-0.5">
-                        <span className="text-[10px] uppercase font-black text-amber-400">
-                          Lote Completo c/ Desconto
+                        <span className="text-[10px] uppercase font-bold text-[var(--gg-accent-text)]">
+                          Lote Completo
                         </span>
-                        {purchaseMode === 'lot' && <Check className="w-3.5 h-3.5 text-amber-400" />}
+                        {purchaseMode === 'lot' && <Check className="w-3.5 h-3.5 text-[var(--gg-accent-text)]" />}
                       </div>
-                      <strong className="text-white text-sm block">{formatBRL(lotDisplayPrice)}</strong>
-                      <span className="text-[10px] text-zinc-400 block mt-0.5">
-                        Leve o pacote inteiro ({hq.collectionCount} revistas)
+                      <strong className="text-[var(--gg-text-strong)] text-sm block tabular-nums">{formatBRL(lotDisplayPrice)}</strong>
+                      <span className="text-[10px] text-[var(--gg-text-muted)] block mt-0.5">
+                        Pacote inteiro ({hq.collectionCount} itens)
                       </span>
                     </button>
 
@@ -215,39 +242,38 @@ export const HQDetailModal: React.FC<HQDetailModalProps> = ({
                         }}
                         className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
                           purchaseMode === 'unit'
-                            ? 'bg-zinc-950 border-emerald-400 ring-2 ring-emerald-500/30 shadow-md'
-                            : 'bg-zinc-950/60 border-zinc-800 hover:border-zinc-600'
+                            ? 'bg-[var(--gg-surface)] border-emerald-500 ring-1 ring-emerald-500/40'
+                            : 'bg-[var(--gg-surface-2)] border-[var(--gg-border)]'
                         }`}
                       >
                         <div className="flex items-center justify-between mb-0.5">
-                          <span className="text-[10px] uppercase font-black text-emerald-400">
-                            Exemplar Avulso (1 por 1)
+                          <span className="text-[10px] uppercase font-bold text-[var(--gg-emerald-text)]">
+                            Avulso (1 por 1)
                           </span>
-                          {purchaseMode === 'unit' && <Check className="w-3.5 h-3.5 text-emerald-400" />}
+                          {purchaseMode === 'unit' && <Check className="w-3.5 h-3.5 text-[var(--gg-emerald-text)]" />}
                         </div>
-                        <strong className="text-white text-sm block">{formatBRL(unitDisplayPrice)}</strong>
-                        <span className="text-[10px] text-zinc-400 block mt-0.5">
-                          Escolha as edições que deseja ({availableIssues.length} disponíveis)
+                        <strong className="text-[var(--gg-text-strong)] text-sm block tabular-nums">{formatBRL(unitDisplayPrice)}</strong>
+                        <span className="text-[10px] text-[var(--gg-text-muted)] block mt-0.5">
+                          Escolha as edições ({availableIssues.length} disponíveis)
                         </span>
                       </button>
                     )}
                   </div>
 
-                  {/* Interactive 1-by-1 issue picker when Exemplar Avulso is active */}
                   {canSelectAvulso && purchaseMode === 'unit' && (
-                    <div className="bg-zinc-950/90 border border-emerald-700/40 rounded-xl p-3 space-y-2.5 animate-in fade-in duration-150">
+                    <div className="bg-[var(--gg-surface)] border border-emerald-500/35 rounded-xl p-3 space-y-2.5">
                       <div className="flex items-center justify-between text-[11px]">
-                        <span className="font-bold text-emerald-300">
-                          Selecione as edições avulsas desejadas:
+                        <span className="font-bold text-[var(--gg-emerald-text)]">
+                          Selecione as unidades desejadas:
                         </span>
-                        <span className="text-zinc-400">
+                        <span className="text-[var(--gg-text-muted)] tabular-nums">
                           {selectedIssues.length} selecionada(s)
                         </span>
                       </div>
 
                       {availableIssues.length === 0 ? (
-                        <p className="text-[11px] text-rose-400">
-                          Todas as edições avulsas deste lote já foram vendidas.
+                        <p className="text-[11px] text-rose-500">
+                          Todas as unidades avulsas deste lote já foram vendidas.
                         </p>
                       ) : (
                         <div className="flex flex-wrap gap-1.5 max-h-36 overflow-y-auto pr-1">
@@ -258,10 +284,10 @@ export const HQDetailModal: React.FC<HQDetailModalProps> = ({
                                 key={issue}
                                 type="button"
                                 onClick={() => toggleIssue(issue)}
-                                className={`px-2.5 py-1.5 rounded-lg text-xs font-bold border transition-all cursor-pointer ${
+                                className={`px-2.5 py-1.5 rounded-lg text-xs font-bold border transition-all cursor-pointer font-mono ${
                                   selected
-                                    ? 'bg-emerald-500 text-black border-emerald-400 shadow'
-                                    : 'bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border-zinc-700'
+                                    ? 'bg-emerald-500 text-zinc-950 border-emerald-400'
+                                    : 'bg-[var(--gg-surface-2)] text-[var(--gg-text)] border-[var(--gg-border)]'
                                 }`}
                               >
                                 {issue}
@@ -272,11 +298,11 @@ export const HQDetailModal: React.FC<HQDetailModalProps> = ({
                       )}
 
                       {selectedIssues.length > 0 && (
-                        <div className="flex items-center justify-between pt-2 border-t border-zinc-800 text-[11px]">
-                          <span className="text-zinc-400">
-                            Edições: <strong className="text-zinc-200">{selectedIssues.join(', ')}</strong>
+                        <div className="flex items-center justify-between pt-2 border-t border-[var(--gg-border)] text-[11px] gap-2">
+                          <span className="text-[var(--gg-text-muted)] truncate">
+                            Edições: <strong className="text-[var(--gg-text-strong)]">{selectedIssues.join(', ')}</strong>
                           </span>
-                          <span className="font-bold text-emerald-400">
+                          <span className="font-bold text-[var(--gg-emerald-text)] tabular-nums shrink-0">
                             {formatBRL(effectiveCheckoutPrice)}
                           </span>
                         </div>
@@ -288,10 +314,10 @@ export const HQDetailModal: React.FC<HQDetailModalProps> = ({
 
               {/* Description */}
               <div className="space-y-1.5 mb-4">
-                <h4 className="text-xs font-bold text-zinc-400 uppercase tracking-wide">
+                <h4 className="text-xs font-semibold text-[var(--gg-text-muted)] uppercase tracking-wide">
                   Descrição
                 </h4>
-                <p className="text-sm text-zinc-200 leading-relaxed bg-zinc-950/40 p-3 rounded-xl border border-zinc-850">
+                <p className="text-sm text-[var(--gg-text)] leading-relaxed bg-[var(--gg-surface-inset)] p-3.5 rounded-xl border border-[var(--gg-border)]">
                   {hq.description}
                 </p>
               </div>
@@ -299,47 +325,47 @@ export const HQDetailModal: React.FC<HQDetailModalProps> = ({
               {/* Condition breakdown */}
               <div className="space-y-1.5 mb-4">
                 <div className="flex items-center justify-between">
-                  <h4 className="text-xs font-bold text-zinc-400 uppercase tracking-wide">
+                  <h4 className="text-xs font-semibold text-[var(--gg-text-muted)] uppercase tracking-wide">
                     Estado de Conservação
                   </h4>
-                  <span className={`text-xs font-bold px-2 py-0.5 rounded border ${conditionMeta.badgeClass}`}>
+                  <span className="text-xs font-semibold text-[var(--gg-accent-text)]">
                     {conditionMeta.label}
                   </span>
                 </div>
 
-                <div className="bg-zinc-900/80 p-3 rounded-xl border border-zinc-800 text-xs text-zinc-300 space-y-1.5">
+                <div className="bg-[var(--gg-surface-inset)] p-3.5 rounded-xl border border-[var(--gg-border)] text-xs text-[var(--gg-text)] space-y-1.5">
                   <p>{conditionMeta.fullDesc}</p>
                   {hq.conditionDetails && (
-                    <div className="text-[11px] text-amber-200/90 pt-1 border-t border-zinc-800/80 font-medium">
+                    <div className="text-[11px] text-[var(--gg-accent-text)] pt-1.5 border-t border-[var(--gg-border)] font-medium">
                       <strong>Observações:</strong> {hq.conditionDetails}
                     </div>
                   )}
                 </div>
               </div>
 
-              {/* Seller attribution (name only, no personal/address data) */}
-              <div className="flex items-center bg-zinc-900/60 p-3 rounded-xl border border-zinc-800 text-xs text-zinc-400">
+              {/* Seller attribution (name only) */}
+              <div className="flex items-center bg-[var(--gg-surface-inset)] p-3 rounded-xl border border-[var(--gg-border)] text-xs text-[var(--gg-text-muted)]">
                 <div className="flex items-center gap-2">
-                  <Store className="w-4 h-4 text-amber-400" />
+                  <Store className="w-4 h-4 text-[var(--gg-accent-text)]" />
                   <div>
-                    <span className="text-[10px] text-zinc-500 block uppercase">Vendido por</span>
-                    <strong className="text-zinc-100">{hq.sellerName}</strong>
+                    <span className="text-[10px] text-[var(--gg-text-subtle)] block uppercase">Vendido por</span>
+                    <strong className="text-[var(--gg-text-strong)]">{hq.sellerName}</strong>
                   </div>
                 </div>
               </div>
             </div>
 
             {/* Bottom Checkout Action */}
-            <div className="pt-4 border-t border-zinc-800 flex items-center justify-between gap-4">
+            <div className="pt-4 border-t border-[var(--gg-border)] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
-                <span className="text-xs text-zinc-400 block font-medium">
+                <span className="text-xs text-[var(--gg-text-muted)] block font-medium">
                   {purchaseMode === 'unit' && canSelectAvulso
-                    ? `${selectedIssues.length} Exemplar(es) Avulso(s)`
+                    ? `${selectedIssues.length} Avulso(s)`
                     : hq.isCollection
-                    ? 'Preço do Lote Promocional'
-                    : 'Preço'}
+                    ? 'Valor do Lote'
+                    : 'Valor'}
                 </span>
-                <span className="text-2xl font-black text-amber-400 font-['Space_Grotesk']">
+                <span className="font-display text-2xl font-bold text-[var(--gg-accent-text)] tabular-nums">
                   {formatBRL(effectiveCheckoutPrice)}
                 </span>
               </div>
@@ -351,22 +377,22 @@ export const HQDetailModal: React.FC<HQDetailModalProps> = ({
                   onAddToCart(hq, purchaseMode === 'unit' && canSelectAvulso ? selectedIssues : undefined);
                   onClose();
                 }}
-                className={`flex items-center gap-2 font-bold px-6 py-3 rounded-xl transition-all active:scale-95 shadow-lg ${
+                className={`flex items-center justify-center gap-2 font-bold px-6 py-3 rounded-xl transition-colors active:scale-95 w-full sm:w-auto ${
                   !canConfirmPurchase
-                    ? 'bg-zinc-800 text-zinc-500 cursor-not-allowed'
+                    ? 'bg-[var(--gg-surface-2)] text-[var(--gg-text-subtle)] cursor-not-allowed'
                     : isInCart && purchaseMode === 'lot'
                     ? 'bg-emerald-600 text-white'
-                    : 'bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-black'
+                    : 'bg-amber-500 hover:bg-amber-400 text-zinc-950'
                 }`}
               >
                 <ShoppingBag className="w-4 h-4" />
                 <span>
                   {!canConfirmPurchase
-                    ? 'Selecione ao menos 1 edição'
+                    ? 'Selecione ao menos 1 unidade'
                     : purchaseMode === 'unit' && canSelectAvulso
                     ? `Adicionar ${selectedIssues.length} Avulso(s)`
                     : isInCart
-                    ? 'No Carrinho (Ver Carrinho)'
+                    ? 'No Carrinho'
                     : 'Adicionar ao Carrinho'}
                 </span>
               </button>

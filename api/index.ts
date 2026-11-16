@@ -210,21 +210,22 @@ app.post('/api/gemini/analyze-cover', async (req, res) => {
     const clientToUse = customApiKey || !defaultAiClient ? createAiClient(effectiveKey) : defaultAiClient;
 
     const franchisesPrompt = existingFranchises.length > 0
-      ? `Categorias já existentes no acervo: [${existingFranchises.join(', ')}]. Se a revista pertencer a um desses personagens/franquias, reutilize exatamente esse nome. Caso seja novo, crie uma categoria clara (ex: "Wolverine", "Justiceiro", "Turma da Mônica", "Tex").`
-      : 'Defina uma categoria clara para o personagem ou franquia principal visível na capa (ex: "Homem-Aranha", "Batman", "Superman", "X-Men", "Wolverine", "Tex", "Turma da Mônica").';
+      ? `Categorias já existentes no catálogo: [${existingFranchises.join(', ')}]. Se o item pertencer a uma dessas franquias/temas, reutilize exatamente esse nome. Caso seja novo, crie uma categoria clara (ex: "Homem-Aranha", "Batman", "Livros de Fantasia", "Star Wars", "Dragon Ball", "Board Games", "Action Figures").`
+      : 'Defina uma categoria clara para o tema, universo ou franquia principal do item (ex: "Homem-Aranha", "Batman", "Star Wars", "Livros", "Dragon Ball", "Action Figures", "Turma da Mônica").';
 
-    const systemInstruction = `Você é um perito catalogador e avaliador de histórias em quadrinhos no Brasil (Editora Abril, Panini, EBAL, Mythos, Rio Gráfica/Globo, Record, Nova Sampa, etc.).
+    const systemInstruction = `Você é um perito catalogador e avaliador de itens geeks e colecionáveis no Brasil — incluindo histórias em quadrinhos (HQs), mangás, livros, action figures, estatuetas, Funko Pop, cards, board games e colecionáveis em geral.
 Sua tarefa é ler e identificar COM PRECISÃO ABSOLUTA o que está na(s) foto(s) enviada(s) (${allImages.length} imagem/imagens).
 
 REGRAS OBRIGATÓRIAS DE FIDELIDADE À IMAGEM:
-1. LEIA OS TEXTOS VISÍVEIS NA CAPA: título exato da revista, subtítulo da história, número da edição (#), logotipo da editora (Abril, Panini, Marvel, DC, EBAL, etc.), selo de preço de capa ou data, e nomes de roteiristas/desenhistas se visíveis.
-2. NÃO INVENTE nem use dados genéricos. Se na imagem houver uma HQ do Batman #12 da Editora Abril de 1988, o título, série, número, ano e descrição DEVEM ser exatamente sobre o Batman #12 da Editora Abril de 1988.
-3. ${franchisesPrompt}
-4. PREÇO E LOTES:
-   - Pesquise mentalmente o valor médio real de mercado brasileiro (sebo/colecionismo) para a edição específica identificada pelo seu estado aparente na foto.
-   - Se houver múltiplas capas ou foto de lote/coleção, avalie o preço unitário individual justo e calcule o preço do lote fechado com 15% a 25% de desconto.
-   - Se for uma revista única, unitPrice e bundlePrice devem ter o mesmo valor do suggestedPrice.
-5. SINOPSE / DESCRIÇÃO: Escreva 2 a 3 frases objetivas descrevendo especificamente a edição/arco mostrado na capa, os personagens envolvidos e detalhes visuais da conservação observada na foto. Nunca escreva textos genéricos ou frases repetitivas sobre limpeza.`;
+1. IDENTIFIQUE O ITEM REAL: pode ser HQ, mangá, livro, action figure, Funko Pop, card ou outro colecionável. Leia todos os textos visíveis na capa, lombada, caixa ou embalagem: título exato, subtítulo/personagem, número REAL da edição/volume/modelo impresso na capa ou caixa, fabricante/editora (Abril, Panini, JBC, Darkside, Intrínseca, Companhia das Letras, Bandai, Hasbro, Funko, Mattel, NECA, Hot Toys, Lego, etc.) e data/ano se visível.
+2. NÚMERO REAL DA EDIÇÃO/MODELO: nunca invente "#01" por padrão. Leia o número real que aparece na capa (ex: "#12", "#45", "Vol. 3", "#01 ao #05"). Se for livro único, action figure ou item sem numeração sequencial, use "Única" ou o número/escala do modelo (ex: "1/10", "#452").
+3. NÃO INVENTE nem use dados genéricos. Descreva exatamente o item fotografado.
+4. ${franchisesPrompt}
+5. PREÇO E LOTES:
+   - Estime o valor médio real de mercado brasileiro (em BRL) considerando raridade, tipo do produto e estado aparente na foto.
+   - Se houver múltiplos itens ou foto de lote/coleção, avalie o preço unitário individual justo e calcule o preço do lote fechado com 15% a 25% de desconto.
+   - Se for item único, unitPrice e bundlePrice devem ter o mesmo valor do suggestedPrice.
+6. DESCRIÇÃO: Escreva 2 a 3 frases objetivas descrevendo especificamente o item, edição/versão ou personagem mostrado na foto e o estado visual observado (capa, caixa, pintura ou páginas).`;
 
     const imageParts = allImages.slice(0, 6).map((b64) => {
       const detectedMime = b64.match(/^data:(image\/[\w+.-]+);base64,/i)?.[1] || mimeType;
@@ -240,21 +241,21 @@ REGRAS OBRIGATÓRIAS DE FIDELIDADE À IMAGEM:
     const responseSchema = {
       type: Type.OBJECT,
       properties: {
-        title: { type: Type.STRING, description: 'Título fiel e exato identificado na capa + número da edição (ou resumo do lote se múltiplas capas)' },
-        publisher: { type: Type.STRING, description: 'Editora exata visível ou correspondente à edição: Editora Abril, Panini, Marvel, DC Comics, Image Comics, Dark Horse ou Outra' },
-        series: { type: Type.STRING, description: 'Nome exato da série/coleção impresso na capa' },
-        franchiseCategory: { type: Type.STRING, description: 'Personagem ou franquia principal visível na capa' },
-        issueNumber: { type: Type.STRING, description: 'Número exato da edição lido na capa (ex: #42 ou #01 ao #05)' },
-        yearEstimate: { type: Type.INTEGER, description: 'Ano real de publicação da edição identificada na capa' },
+        title: { type: Type.STRING, description: 'Título ou nome exato do item identificado (HQ, livro, mangá, action figure, etc.) + número real se houver' },
+        publisher: { type: Type.STRING, description: 'Editora ou marca/fabricante real visível na peça ou embalagem (ex: Editora Abril, Panini, JBC, Companhia das Letras, Darkside, Bandai, Funko, Hasbro, NECA, etc.)' },
+        series: { type: Type.STRING, description: 'Nome exato da série, linha, coleção ou autor' },
+        franchiseCategory: { type: Type.STRING, description: 'Franquia, personagem, gênero literário ou linha colecionável principal' },
+        issueNumber: { type: Type.STRING, description: 'Número real lido na capa/caixa (ex: #42, Vol. 2, #01 ao #05) ou Única se não numerado' },
+        yearEstimate: { type: Type.INTEGER, description: 'Ano real ou aproximado de lançamento do item identificado' },
         suggestedPrice: { type: Type.NUMBER, description: 'Preço justo de mercado brasileiro em BRL' },
-        unitPrice: { type: Type.NUMBER, description: 'Preço unitário por exemplar em BRL' },
-        bundlePrice: { type: Type.NUMBER, description: 'Preço do lote fechado com desconto em BRL (igual ao unitário se 1 revista)' },
-        isCollection: { type: Type.BOOLEAN, description: 'true se houver múltiplas edições/fotos de coleção, false se exemplar único' },
-        collectionCount: { type: Type.INTEGER, description: 'Quantidade de exemplares identificados' },
+        unitPrice: { type: Type.NUMBER, description: 'Preço unitário por item em BRL' },
+        bundlePrice: { type: Type.NUMBER, description: 'Preço do lote fechado com desconto em BRL (igual ao unitário se 1 item)' },
+        isCollection: { type: Type.BOOLEAN, description: 'true se houver múltiplos itens/fotos de lote, false se item único' },
+        collectionCount: { type: Type.INTEGER, description: 'Quantidade de itens identificados' },
         allowsUnitPurchase: { type: Type.BOOLEAN, description: 'true se for lote e permitir venda avulsa' },
-        description: { type: Type.STRING, description: 'Descrição específica desta edição/arco e estado visual observado na capa' },
-        conditionGradeSuggestion: { type: Type.STRING, description: 'otimo, bom, ruim ou leitura conforme desgaste visível na capa' },
-        keyCharacters: { type: Type.ARRAY, items: { type: Type.STRING }, description: 'Personagens presentes na capa' },
+        description: { type: Type.STRING, description: 'Descrição específica do item e estado visual observado na foto' },
+        conditionGradeSuggestion: { type: Type.STRING, description: 'otimo, bom, ruim ou leitura conforme estado visível na foto' },
+        keyCharacters: { type: Type.ARRAY, items: { type: Type.STRING }, description: 'Personagens ou elementos centrais visíveis' },
       },
       required: [
         'title',
@@ -275,7 +276,7 @@ REGRAS OBRIGATÓRIAS DE FIDELIDADE À IMAGEM:
         clientToUse,
         imageParts,
         systemInstruction,
-        `Identifique exatamente qual HQ (ou conjunto de HQs) está nesta(s) ${allImages.length} imagem(ns). Transcreva o título, número, série, editora, ano real de publicação, avalie o estado visual e sugira preço realista do mercado brasileiro.`,
+        `Identifique exatamente qual item geek/colecionável (HQ, mangá, livro, action figure, Funko, card, board game ou lote) está nesta(s) ${allImages.length} imagem(ns). Leia os textos reais, número exato da capa/caixa, marca/editora, ano, estado visual e sugira preço realista em BRL.`,
         responseSchema
       );
     } catch (genErr: any) {
@@ -344,7 +345,7 @@ app.post('/api/mercadopago/create-preference', async (req, res) => {
     const discountedSubtotal = Math.max(1, subtotal - numericDiscount);
     const discountRatio = subtotal > 0 ? discountedSubtotal / subtotal : 1;
     const total = Math.max(1, discountedSubtotal + Number(shippingCost || 0));
-    const orderId = `HQM-${Date.now().toString().slice(-6)}`;
+    const orderId = `GG-${Date.now().toString().slice(-6)}`;
 
     const customMpToken = ((req.headers['x-mp-access-token'] as string) || '').trim();
     const mpAccessToken = customMpToken || (process.env.MERCADO_PAGO_ACCESS_TOKEN || '').trim();
@@ -408,7 +409,7 @@ app.post('/api/mercadopago/create-preference', async (req, res) => {
       }
     }
 
-    const pixPayload = `00020126580014BR.GOV.BCB.PIX0136${storePixKey}520400005303986540${total.toFixed(2)}5802BR5915HQ MASTER COMICS6009SAO PAULO62070503***6304`;
+    const pixPayload = `00020126580014BR.GOV.BCB.PIX0136${storePixKey}520400005303986540${total.toFixed(2)}5802BR5909GEEK GRID6009SAO PAULO62070503***6304`;
 
     return res.json({
       success: true,

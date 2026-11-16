@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { X, Handshake, ShieldAlert, CheckCircle, Store, Send, MapPin, Search } from 'lucide-react';
+import { X, Handshake, CheckCircle, Send, Search, MapPin } from 'lucide-react';
 import { Seller } from '../types.ts';
 
 interface PartnerOnboardingModalProps {
@@ -16,9 +16,13 @@ export const PartnerOnboardingModal: React.FC<PartnerOnboardingModalProps> = ({
   const [name, setName] = useState('');
   const [storeName, setStoreName] = useState('');
   const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
   const [cep, setCep] = useState('');
-  const [address, setAddress] = useState('');
+  const [street, setStreet] = useState('');
+  const [number, setNumber] = useState('');
+  const [complement, setComplement] = useState('');
+  const [neighborhood, setNeighborhood] = useState('');
+  const [city, setCity] = useState('');
+  const [stateUf, setStateUf] = useState('');
   const [lookingUpCep, setLookingUpCep] = useState(false);
   const [cepFeedback, setCepFeedback] = useState<string | null>(null);
   const [acceptedTerms, setAcceptedTerms] = useState(false);
@@ -38,15 +42,17 @@ export const PartnerOnboardingModal: React.FC<PartnerOnboardingModalProps> = ({
       const res = await fetch(`https://viacep.com.br/ws/${raw}/json/`);
       const data = await res.json();
       if (data.erro) {
-        setCepFeedback('CEP não encontrado.');
+        setCepFeedback('CEP não encontrado nos Correios.');
       } else {
         setCep(`${raw.slice(0, 5)}-${raw.slice(5)}`);
-        const formatted = `${data.localidade}/${data.uf}`;
-        setAddress(formatted);
+        setStreet(data.logradouro || '');
+        setNeighborhood(data.bairro || '');
+        setCity(data.localidade || '');
+        setStateUf((data.uf || '').toUpperCase());
         setCepFeedback(null);
       }
     } catch {
-      setCepFeedback('Falha ao buscar CEP. Digite a cidade/estado manualmente.');
+      setCepFeedback('Falha ao buscar CEP. Preencha o endereço manualmente.');
     } finally {
       setLookingUpCep(false);
     }
@@ -54,127 +60,151 @@ export const PartnerOnboardingModal: React.FC<PartnerOnboardingModalProps> = ({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name || !email || !acceptedTerms) return;
+    if (!name.trim() || !storeName.trim() || !email.trim() || !cep.trim() || !street.trim() || !city.trim() || !acceptedTerms) {
+      return;
+    }
+
+    const formattedAddress = `${street.trim()}, nº ${number.trim() || 'S/N'}${complement.trim() ? ` (${complement.trim()})` : ''} - ${neighborhood.trim() || 'Centro'}, ${city.trim()}/${stateUf.trim().toUpperCase()}`;
 
     onRegisterPartner({
-      name,
-      storeName: storeName || `Acervo de ${name}`,
-      email,
-      password: password || '123456',
-      cep,
-      address,
+      name: name.trim(),
+      storeName: storeName.trim(),
+      email: email.trim(),
+      approvalStatus: 'pending',
+      password: '',
+      cep: cep.trim(),
+      address: formattedAddress,
+      street: street.trim(),
+      number: number.trim(),
+      complement: complement.trim(),
+      neighborhood: neighborhood.trim(),
+      city: city.trim(),
+      state: stateUf.trim().toUpperCase(),
       role: 'partner',
     });
 
     setSubmitted(true);
   };
 
+  const handleResetAndClose = () => {
+    setSubmitted(false);
+    setName('');
+    setStoreName('');
+    setEmail('');
+    setCep('');
+    setStreet('');
+    setNumber('');
+    setComplement('');
+    setNeighborhood('');
+    setCity('');
+    setStateUf('');
+    setAcceptedTerms(false);
+    setCepFeedback(null);
+    onClose();
+  };
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-in fade-in duration-200">
-      <div className="bg-[#10131c] border border-zinc-800 rounded-3xl w-full max-w-lg p-6 shadow-2xl relative max-h-[90vh] overflow-y-auto">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/75 backdrop-blur-md">
+      <div className="bg-[var(--gg-surface)] border border-[var(--gg-border)] rounded-2xl sm:rounded-3xl w-full max-w-xl p-5 sm:p-6 shadow-2xl relative max-h-[92vh] overflow-y-auto">
         <button
-          onClick={onClose}
-          className="absolute top-4 right-4 text-zinc-400 hover:text-white p-1 rounded-lg"
+          type="button"
+          onClick={handleResetAndClose}
+          aria-label="Fechar janela"
+          className="absolute top-4 right-4 text-[var(--gg-text-muted)] hover:text-[var(--gg-text-strong)] p-1 rounded-lg transition-colors"
         >
           <X className="w-5 h-5" />
         </button>
 
         {submitted ? (
           <div className="text-center py-6 space-y-4">
-            <div className="w-14 h-14 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 flex items-center justify-center mx-auto">
+            <div className="w-14 h-14 rounded-full bg-emerald-500/20 text-emerald-500 border border-emerald-500/40 flex items-center justify-center mx-auto">
               <CheckCircle className="w-7 h-7" />
             </div>
-            <h3 className="text-xl font-black text-white font-['Space_Grotesk']">
-              Cadastro de Parceiro Registrado!
+            <h3 className="font-display text-xl font-bold text-[var(--gg-text-strong)]">
+              Solicitação de Cadastro Enviada!
             </h3>
-            <p className="text-xs text-zinc-300 max-w-sm mx-auto leading-relaxed">
-              Sua loja <strong className="text-amber-400">{storeName}</strong> foi cadastrada. A administração da BancaHQ liberou seu acesso ao painel com seu e-mail e senha!
+            <p className="text-xs text-[var(--gg-text-muted)] max-w-sm mx-auto leading-relaxed">
+              Os dados da loja <strong className="text-[var(--gg-accent-text)]">{storeName}</strong> foram registrados. A administração irá criar a sua senha de acesso e liberar o seu painel em breve.
             </p>
             <button
-              onClick={onClose}
-              className="w-full bg-amber-500 hover:bg-amber-400 text-black font-bold py-2.5 rounded-xl text-xs"
+              type="button"
+              onClick={handleResetAndClose}
+              className="w-full bg-amber-500 hover:bg-amber-400 text-zinc-950 font-bold py-2.5 rounded-xl text-xs transition-colors"
             >
-              Começar a Anunciar HQs
+              Fechar e Voltar à Loja
             </button>
           </div>
         ) : (
-          <div>
-            <div className="flex items-center gap-2 mb-2 text-amber-400">
-              <Handshake className="w-5 h-5" />
-              <h3 className="text-lg font-black text-white font-['Space_Grotesk']">
-                Anuncie Suas HQs Conosco
-              </h3>
-            </div>
-
-            {/* Crucial Escrow & Safety Policy */}
-            <div className="bg-amber-950/20 border border-amber-600/40 rounded-2xl p-3.5 mb-4 space-y-2 text-xs text-amber-200/90">
-              <div className="flex items-center gap-1.5 font-bold text-amber-300">
-                <ShieldAlert className="w-4 h-4 text-amber-400" />
-                Como Funciona a Parceria & Repasse Financeiro:
+          <div className="space-y-4">
+            <div className="pr-6">
+              <div className="flex items-center gap-2 mb-1 text-[var(--gg-accent-text)]">
+                <Handshake className="w-5 h-5 shrink-0" />
+                <h3 className="font-display text-lg font-bold text-[var(--gg-text-strong)]">
+                  Cadastro de Novo Vendedor
+                </h3>
               </div>
-              <ul className="list-disc pl-4 space-y-1 text-[11px] text-zinc-300 leading-relaxed">
-                <li>Você ganha acesso ao painel exclusivo para fotografar suas revistas e catalogar com leitura visual de capas.</li>
-                <li>Cada anúncio exibirá com destaque: <strong className="text-white">"Vendido por: [Nome da Sua Loja]"</strong>.</li>
-                <li><strong className="text-amber-300">Repasse Seguro:</strong> A administração financeira é centralizada e o pagamento das suas vendas é repassado após o comprador receber a encomenda com rastreamento confirmado.</li>
-                <li>Nosso compromisso de honra: higienização a seco e garantia de 100% de páginas presentes.</li>
-              </ul>
+              <p className="text-xs text-[var(--gg-text-muted)] leading-relaxed">
+                Preencha seus dados completos e o endereço de postagem. A senha de acesso será gerada pelo administrador após a conferência do cadastro.
+              </p>
             </div>
 
             <form onSubmit={handleSubmit} className="space-y-3.5">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-zinc-300 mb-1">Seu Nome</label>
+                  <label className="block text-xs font-semibold text-[var(--gg-text)] mb-1">
+                    Nome Completo *
+                  </label>
                   <input
                     type="text"
                     value={name}
                     onChange={(e) => setName(e.target.value)}
-                    placeholder="Ex: Carlos Gibis"
-                    className="w-full bg-zinc-950 border border-zinc-700 rounded-xl py-2 px-3 text-xs text-zinc-200 focus:outline-none focus:border-amber-500"
+                    placeholder="Ex: Carlos Eduardo Mendes"
+                    className="w-full bg-[var(--gg-surface-inset)] border border-[var(--gg-border)] rounded-xl py-2 px-3 text-xs text-[var(--gg-text-strong)] focus:outline-none focus:border-amber-500"
                     required
                   />
                 </div>
+
                 <div>
-                  <label className="block text-xs font-semibold text-zinc-300 mb-1">Nome da Sua Loja / Banca</label>
+                  <label className="block text-xs font-semibold text-[var(--gg-text)] mb-1">
+                    Nome da Loja (que aparecerá no site) *
+                  </label>
                   <input
                     type="text"
                     value={storeName}
                     onChange={(e) => setStoreName(e.target.value)}
-                    placeholder="Ex: Gibiteca Vintage"
-                    className="w-full bg-zinc-950 border border-zinc-700 rounded-xl py-2 px-3 text-xs text-zinc-200 focus:outline-none focus:border-amber-500"
+                    placeholder="Ex: Acervo Vintage"
+                    className="w-full bg-[var(--gg-surface-inset)] border border-[var(--gg-border)] rounded-xl py-2 px-3 text-xs text-[var(--gg-text-strong)] focus:outline-none focus:border-amber-500"
                     required
                   />
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold text-zinc-300 mb-1">Seu E-mail</label>
-                  <input
-                    type="email"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    placeholder="email@parceiro.com"
-                    className="w-full bg-zinc-950 border border-zinc-700 rounded-xl py-2 px-3 text-xs text-zinc-200 focus:outline-none focus:border-amber-500"
-                    required
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-zinc-300 mb-1">Senha de Acesso</label>
-                  <input
-                    type="password"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    placeholder="Crie uma senha"
-                    className="w-full bg-zinc-950 border border-zinc-700 rounded-xl py-2 px-3 text-xs text-zinc-200 focus:outline-none focus:border-amber-500"
-                    required
-                  />
-                </div>
+              <div>
+                <label className="block text-xs font-semibold text-[var(--gg-text)] mb-1">
+                  E-mail para Acesso ao Painel *
+                </label>
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="email@exemplo.com"
+                  className="w-full bg-[var(--gg-surface-inset)] border border-[var(--gg-border)] rounded-xl py-2 px-3 text-xs text-[var(--gg-text-strong)] focus:outline-none focus:border-amber-500"
+                  required
+                />
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {/* Full Shipping Origin Address */}
+              <div className="bg-[var(--gg-surface-inset)] border border-[var(--gg-border)] rounded-2xl p-3.5 space-y-3">
+                <div className="flex items-center gap-1.5 text-xs font-bold text-[var(--gg-accent-text)]">
+                  <MapPin className="w-3.5 h-3.5" />
+                  <span>Endereço Completo de Onde Será Realizado o Envio</span>
+                </div>
+
                 <div>
-                  <label className="block text-xs font-semibold text-zinc-300 mb-1">CEP de Origem (Para Frete)</label>
-                  <div className="flex gap-1.5">
+                  <label className="block text-[11px] font-semibold text-[var(--gg-text-muted)] mb-1">
+                    CEP de Envio *
+                  </label>
+                  <div className="flex gap-2">
                     <input
                       type="text"
                       maxLength={9}
@@ -182,36 +212,113 @@ export const PartnerOnboardingModal: React.FC<PartnerOnboardingModalProps> = ({
                       onChange={(e) => {
                         const val = e.target.value;
                         setCep(val);
+                        setCepFeedback(null);
                         if (val.replace(/\D/g, '').length === 8) {
                           void handleLookupCep(val);
                         }
                       }}
-                      placeholder="Ex: 01310-100"
-                      className="flex-1 bg-zinc-950 border border-zinc-700 rounded-xl py-2 px-3 text-xs text-zinc-200 focus:outline-none focus:border-amber-500 font-mono"
+                      placeholder="00000-000"
+                      className="flex-1 bg-[var(--gg-surface)] border border-[var(--gg-border)] rounded-xl py-2 px-3 text-xs text-[var(--gg-text-strong)] focus:outline-none focus:border-amber-500 font-mono"
                       required
                     />
                     <button
                       type="button"
                       onClick={() => handleLookupCep()}
                       disabled={lookingUpCep}
-                      className="bg-zinc-800 hover:bg-zinc-700 text-zinc-200 px-2.5 py-2 rounded-xl text-xs font-semibold border border-zinc-700 flex items-center gap-1"
+                      className="bg-[var(--gg-surface-2)] hover:opacity-90 text-[var(--gg-text-strong)] px-3 py-2 rounded-xl text-xs font-semibold border border-[var(--gg-border)] flex items-center gap-1 shrink-0"
                     >
                       <Search className="w-3.5 h-3.5" />
-                      {lookingUpCep ? '...' : 'Buscar'}
+                      {lookingUpCep ? 'Buscando...' : 'Buscar CEP'}
                     </button>
                   </div>
-                  {cepFeedback && <p className="text-[11px] text-rose-400 mt-1">{cepFeedback}</p>}
+                  {cepFeedback && <p className="text-[11px] text-rose-500 mt-1">{cepFeedback}</p>}
                 </div>
-                <div>
-                  <label className="block text-xs font-semibold text-zinc-300 mb-1">Cidade / Estado</label>
-                  <input
-                    type="text"
-                    value={address}
-                    onChange={(e) => setAddress(e.target.value)}
-                    placeholder="Ex: São Paulo - SP"
-                    className="w-full bg-zinc-950 border border-zinc-700 rounded-xl py-2 px-3 text-xs text-zinc-200 focus:outline-none focus:border-amber-500"
-                    required
-                  />
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                  <div className="sm:col-span-2">
+                    <label className="block text-[11px] font-semibold text-[var(--gg-text-muted)] mb-1">
+                      Rua / Logradouro *
+                    </label>
+                    <input
+                      type="text"
+                      value={street}
+                      onChange={(e) => setStreet(e.target.value)}
+                      placeholder="Ex: Avenida Paulista"
+                      className="w-full bg-[var(--gg-surface)] border border-[var(--gg-border)] rounded-xl py-2 px-3 text-xs text-[var(--gg-text-strong)] focus:outline-none focus:border-amber-500"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-semibold text-[var(--gg-text-muted)] mb-1">
+                      Número *
+                    </label>
+                    <input
+                      type="text"
+                      value={number}
+                      onChange={(e) => setNumber(e.target.value)}
+                      placeholder="123"
+                      className="w-full bg-[var(--gg-surface)] border border-[var(--gg-border)] rounded-xl py-2 px-3 text-xs text-[var(--gg-text-strong)] focus:outline-none focus:border-amber-500"
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  <div>
+                    <label className="block text-[11px] font-semibold text-[var(--gg-text-muted)] mb-1">
+                      Complemento (opcional)
+                    </label>
+                    <input
+                      type="text"
+                      value={complement}
+                      onChange={(e) => setComplement(e.target.value)}
+                      placeholder="Sala, Apto, Bloco"
+                      className="w-full bg-[var(--gg-surface)] border border-[var(--gg-border)] rounded-xl py-2 px-3 text-xs text-[var(--gg-text-strong)] focus:outline-none focus:border-amber-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-semibold text-[var(--gg-text-muted)] mb-1">
+                      Bairro *
+                    </label>
+                    <input
+                      type="text"
+                      value={neighborhood}
+                      onChange={(e) => setNeighborhood(e.target.value)}
+                      placeholder="Centro"
+                      className="w-full bg-[var(--gg-surface)] border border-[var(--gg-border)] rounded-xl py-2 px-3 text-xs text-[var(--gg-text-strong)] focus:outline-none focus:border-amber-500"
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                  <div className="sm:col-span-2">
+                    <label className="block text-[11px] font-semibold text-[var(--gg-text-muted)] mb-1">
+                      Cidade *
+                    </label>
+                    <input
+                      type="text"
+                      value={city}
+                      onChange={(e) => setCity(e.target.value)}
+                      placeholder="São Paulo"
+                      className="w-full bg-[var(--gg-surface)] border border-[var(--gg-border)] rounded-xl py-2 px-3 text-xs text-[var(--gg-text-strong)] focus:outline-none focus:border-amber-500"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-semibold text-[var(--gg-text-muted)] mb-1">
+                      Estado (UF) *
+                    </label>
+                    <input
+                      type="text"
+                      maxLength={2}
+                      value={stateUf}
+                      onChange={(e) => setStateUf(e.target.value.toUpperCase())}
+                      placeholder="SP"
+                      className="w-full bg-[var(--gg-surface)] border border-[var(--gg-border)] rounded-xl py-2 px-3 text-xs text-[var(--gg-text-strong)] uppercase font-bold focus:outline-none focus:border-amber-500"
+                      required
+                    />
+                  </div>
                 </div>
               </div>
 
@@ -223,22 +330,22 @@ export const PartnerOnboardingModal: React.FC<PartnerOnboardingModalProps> = ({
                   className="mt-0.5 accent-amber-500"
                   required
                 />
-                <span className="text-[11px] text-zinc-400 leading-tight">
-                  Concordo com os termos de repasse financeiro após entrega confirmada e declaro que todas as minhas HQs contêm 100% das páginas para leitura.
+                <span className="text-[11px] text-[var(--gg-text-muted)] leading-tight">
+                  Concordo com os termos da plataforma e garanto a veracidade do endereço de postagem e dos itens anunciados. Seus dados pessoais ficam restritos à administração.
                 </span>
               </label>
 
               <button
                 type="submit"
                 disabled={!acceptedTerms}
-                className={`w-full font-bold py-3 rounded-xl text-xs flex items-center justify-center gap-2 transition-transform active:scale-95 shadow-lg ${
+                className={`w-full font-bold py-3 rounded-xl text-xs flex items-center justify-center gap-2 transition-colors ${
                   acceptedTerms
-                    ? 'bg-gradient-to-r from-amber-500 to-amber-600 text-black hover:from-amber-400 hover:to-amber-500'
-                    : 'bg-zinc-800 text-zinc-500 cursor-not-allowed'
+                    ? 'bg-amber-500 text-zinc-950 hover:bg-amber-400'
+                    : 'bg-[var(--gg-surface-2)] text-[var(--gg-text-subtle)] cursor-not-allowed'
                 }`}
               >
                 <Send className="w-4 h-4" />
-                Cadastrar Minha Banca de Parceiro
+                Enviar Cadastro de Vendedor
               </button>
             </form>
           </div>

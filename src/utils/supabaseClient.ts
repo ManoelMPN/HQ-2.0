@@ -78,23 +78,23 @@ export function getSupabase(): SupabaseClient | null {
 
 // ---------- ROW MAPPERS (TS <-> Postgres) ----------
 
-function mapSellerToRow(s: Seller, includeExtended = true) {
+function mapSellerToRow(s: Seller, tier: 'full' | 'extended_v1' | 'core' = 'full') {
   const base: Record<string, any> = {
     id: s.id,
     name: s.name,
     store_name: s.storeName,
     email: s.email,
     role: s.role,
-    password: s.password || 'admin',
+    password: s.password || '',
     cep: s.cep || '01310-100',
-    address: s.address || 'São Paulo - SP',
+    address: s.address || 'Brasil',
     total_sales: s.totalSales || 0,
     total_earnings: s.totalEarnings || 0,
     active: s.active ?? true,
     created_at: s.joinedAt || new Date().toISOString(),
   };
 
-  if (includeExtended) {
+  if (tier === 'extended_v1' || tier === 'full') {
     Object.assign(base, {
       phone: s.phone || '',
       cpf_cnpj: s.cpfCnpj || '',
@@ -112,6 +112,17 @@ function mapSellerToRow(s: Seller, includeExtended = true) {
     });
   }
 
+  if (tier === 'full') {
+    Object.assign(base, {
+      approval_status: s.approvalStatus || (s.active === false ? 'pending' : 'approved'),
+      checkout_provider: s.checkoutProvider || 'mercadopago',
+      checkout_public_key: s.checkoutPublicKey || '',
+      checkout_api_key: s.checkoutApiKey || '',
+      checkout_url: s.checkoutUrl || '',
+      gemini_api_key: s.geminiApiKey || '',
+    });
+  }
+
   return base;
 }
 
@@ -122,6 +133,7 @@ function mapRowToSeller(row: any): Seller {
     storeName: row.store_name || row.name,
     email: row.email,
     role: row.role === 'master' ? 'master' : 'partner',
+    approvalStatus: row.approval_status || (row.active === false ? 'pending' : 'approved'),
     password: row.password,
     phone: row.phone || '',
     cpfCnpj: row.cpf_cnpj || '',
@@ -138,6 +150,11 @@ function mapRowToSeller(row: any): Seller {
     bankName: row.bank_name || '',
     accountHolder: row.account_holder || row.name || '',
     maxDiscountPercent: row.max_discount_percent !== undefined && row.max_discount_percent !== null ? Number(row.max_discount_percent) : 10,
+    checkoutProvider: row.checkout_provider || 'mercadopago',
+    checkoutPublicKey: row.checkout_public_key || '',
+    checkoutApiKey: row.checkout_api_key || '',
+    checkoutUrl: row.checkout_url || '',
+    geminiApiKey: row.gemini_api_key || '',
     totalSales: Number(row.total_sales || 0),
     totalEarnings: Number(row.total_earnings || 0),
     active: row.active ?? true,
@@ -165,7 +182,7 @@ function mapHQToRow(hq: HQItem, includeExtended = true) {
     collection_count: Number(hq.collectionCount) || 1,
     images: Array.isArray(hq.images) ? hq.images : [],
     seller_id: hq.sellerId || 'master',
-    seller_name: hq.sellerName || 'HQ Master',
+    seller_name: hq.sellerName || 'Geek Grid',
     seller_address: '',
     seller_cep: '',
     featured: Boolean(hq.featured),
@@ -213,7 +230,7 @@ function mapRowToHQ(row: any): HQItem {
     soldIssues: Array.isArray(row.sold_issues) ? row.sold_issues : [],
     images: Array.isArray(row.images) ? row.images : [],
     sellerId: row.seller_id || 'master',
-    sellerName: row.seller_name || 'HQ Master',
+    sellerName: row.seller_name || 'Geek Grid',
     sellerAddress: '',
     sellerCep: '',
     featured: Boolean(row.featured),
@@ -510,11 +527,13 @@ export async function upsertSellerToSupabase(seller: Seller): Promise<{ ok: bool
   const sb = getSupabase();
   if (!sb) return { ok: false };
 
-  const { error } = await sb.from('sellers').upsert(mapSellerToRow(seller, true), { onConflict: 'id' });
+  const { error } = await sb.from('sellers').upsert(mapSellerToRow(seller, 'full'), { onConflict: 'id' });
   if (error) {
-    // Retry with core columns if extended columns weren't added yet
-    const retry = await sb.from('sellers').upsert(mapSellerToRow(seller, false), { onConflict: 'id' });
-    if (retry.error) return { ok: false, error: retry.error.message };
+    const retryV1 = await sb.from('sellers').upsert(mapSellerToRow(seller, 'extended_v1'), { onConflict: 'id' });
+    if (retryV1.error) {
+      const retryCore = await sb.from('sellers').upsert(mapSellerToRow(seller, 'core'), { onConflict: 'id' });
+      if (retryCore.error) return { ok: false, error: retryCore.error.message };
+    }
   }
   return { ok: true };
 }
@@ -573,7 +592,7 @@ export async function upsertProposalToSupabase(proposal: DiscountProposal): Prom
   return { ok: true };
 }
 
-export const SUPABASE_SQL_SCHEMA = `-- HQ MASTER - SCHEMA OFICIAL PARA SUPABASE POSTGRESQL
+export const SUPABASE_SQL_SCHEMA = `-- GEEK GRID - SCHEMA OFICIAL PARA SUPABASE POSTGRESQL
 -- Copie e cole este código no menu "SQL Editor" do seu painel Supabase e clique em RUN.
 
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
@@ -699,6 +718,12 @@ ALTER TABLE public.sellers ADD COLUMN IF NOT EXISTS pix_key TEXT;
 ALTER TABLE public.sellers ADD COLUMN IF NOT EXISTS bank_name TEXT;
 ALTER TABLE public.sellers ADD COLUMN IF NOT EXISTS account_holder TEXT;
 ALTER TABLE public.sellers ADD COLUMN IF NOT EXISTS max_discount_percent NUMERIC(5,2) DEFAULT 10;
+ALTER TABLE public.sellers ADD COLUMN IF NOT EXISTS approval_status TEXT DEFAULT 'approved';
+ALTER TABLE public.sellers ADD COLUMN IF NOT EXISTS checkout_provider TEXT DEFAULT 'mercadopago';
+ALTER TABLE public.sellers ADD COLUMN IF NOT EXISTS checkout_public_key TEXT;
+ALTER TABLE public.sellers ADD COLUMN IF NOT EXISTS checkout_api_key TEXT;
+ALTER TABLE public.sellers ADD COLUMN IF NOT EXISTS checkout_url TEXT;
+ALTER TABLE public.sellers ADD COLUMN IF NOT EXISTS gemini_api_key TEXT;
 
 ALTER TABLE public.hqs ADD COLUMN IF NOT EXISTS unit_price NUMERIC(10,2);
 ALTER TABLE public.hqs ADD COLUMN IF NOT EXISTS bundle_price NUMERIC(10,2);

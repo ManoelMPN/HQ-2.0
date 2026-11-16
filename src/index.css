@@ -1,1 +1,58 @@
 @import "tailwindcss";
+
+@theme {
+  --font-sans: "DM Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+}
+
+:root {
+  color-scheme: light;
+  --gg-bg: #f5f6f8;
+  --gg-surface: #ffffff;
+  --gg-surface-2: #eef1f5;
+  --gg-surface-inset: #f8fafc;
+  --gg-footer: #eaedf2;
+  --gg-border: #e2e8f0;
+  --gg-border-strong: #cbd5e1;
+  --gg-text: #1e293b;
+  --gg-text-strong: #0f172a;
+  --gg-text-muted: #475569;
+  --gg-text-subtle: #64748b;
+  --gg-accent-text: #b45309;
+  --gg-emerald-text: #047857;
+  --gg-logo-box: #ffffff;
+  --gg-logo-stroke: #cbd5e1;
+  --gg-logo-ink: #0f172a;
+}
+
+html.dark {
+  color-scheme: dark;
+  --gg-bg: #0b0c0f;
+  --gg-surface: #121419;
+  --gg-surface-2: #171a21;
+  --gg-surface-inset: #0b0c0f;
+  --gg-footer: #08090c;
+  --gg-border: #27272a;
+  --gg-border-strong: #3f3f46;
+  --gg-text: #e4e4e7;
+  --gg-text-strong: #ffffff;
+  --gg-text-muted: #a1a1aa;
+  --gg-text-subtle: #71717a;
+  --gg-accent-text: #fbbf24;
+  --gg-emerald-text: #34d399;
+  --gg-logo-box: #14171f;
+  --gg-logo-stroke: #272a34;
+  --gg-logo-ink: #e4e4e7;
+}
+
+body {
+  font-family: var(--font-sans);
+  background-color: var(--gg-bg);
+  color: var(--gg-text);
+  transition: background-color 220ms ease, color 220ms ease;
+}
+
+h1, h2, h3, h4, .font-display {
+  font-family: var(--font-display);
+}

@@ -34,12 +34,28 @@ export function getConditionInfo(condition: ConditionGrade) {
       };
     case 'leitura':
       return {
-        label: 'Apenas para Leitura (Brechó HQ)',
-        badgeClass: 'bg-rose-950 text-rose-300 border-rose-700/60',
-        shortDesc: 'Capa soltando/desgastada, grampo oxidado, porém completa para leitura.',
-        fullDesc: 'Ideal para quem busca ler a história gastando pouco (a partir de R$ 1,00). Pode ter capa solta, marcas de fita adesiva antiga ou desgaste severo, mas GARANTIMOS 100% das páginas para leitura completa.',
+        label: 'Apenas para Leitura',
+        badgeClass: 'bg-rose-950/80 text-rose-300 border-rose-800/60',
+        shortDesc: 'Capa desgastada ou grampo oxidado, porém completa para leitura.',
+        fullDesc: 'Ideal para quem busca ler a obra gastando menos. Pode ter desgaste visível ou marcas do tempo, mas garantimos 100% das páginas para leitura completa.',
       };
   }
+}
+
+export function formatIssueLabel(issueNumber?: string): string {
+  const raw = (issueNumber || '').trim();
+  if (!raw) return 'Única';
+
+  // Collapse accidental repeated hashes like "##01" -> "#01"
+  const collapsed = raw.replace(/#{2,}/g, '#');
+  if (collapsed.startsWith('#')) return collapsed;
+
+  // Preserve explicit words like "Vol. 3", "Edição Única", "Lote 1-15", "Escala 1/10"
+  if (/^[a-zA-ZÀ-ÿ]/.test(collapsed)) {
+    return collapsed;
+  }
+
+  return `#${collapsed}`;
 }
 
 export function normalizeFranchiseName(rawName: string, existingFranchises: string[]): string {
@@ -118,6 +134,7 @@ export function filterHQs(hqs: HQItem[], filters: FilterState): HQItem[] {
         hq.title.toLowerCase().includes(q) ||
         hq.series.toLowerCase().includes(q) ||
         hq.franchiseCategory.toLowerCase().includes(q) ||
+        hq.publisher.toLowerCase().includes(q) ||
         hq.description.toLowerCase().includes(q) ||
         hq.issueNumber.toLowerCase().includes(q);
       if (!matchText) return false;
@@ -156,7 +173,7 @@ export function filterHQs(hqs: HQItem[], filters: FilterState): HQItem[] {
       return false;
     }
 
-    // Only R$ 1,00 calls
+    // Legacy 1-real filter flag
     if (filters.onlyOneReal && (!hq.isRareSpecial1Real && hq.price > 1.0)) {
       return false;
     }
@@ -203,7 +220,7 @@ export function calculateCartTotals(
     const sId = item.hq.sellerId || 'master';
     if (!sellerGroups[sId]) {
       sellerGroups[sId] = {
-        sellerName: item.hq.sellerName || 'Banca Principal',
+        sellerName: item.hq.sellerName || 'Geek Grid',
         items: [],
         subtotal: 0,
       };
@@ -326,6 +343,208 @@ export function parseIssueNumbersFromRange(issueInput: string, count: number): s
     list.push(`#${String(startNum + i).padStart(2, '0')}`);
   }
   return list;
+}
+
+function normalizeCollectionToken(raw: string): string {
+  return (raw || '')
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s+/g, ' ');
+}
+
+/**
+ * Only items sharing the exact same sellerId + character/theme (franchiseCategory) + series/collection
+ * are allowed to be grouped together into a dynamic lot.
+ */
+export function buildCollectionGroupKey(
+  sellerId: string,
+  franchiseCategory: string,
+  series: string
+): string {
+  const sId = (sellerId || 'master').trim().toLowerCase();
+  const franchise = normalizeCollectionToken(franchiseCategory);
+  const ser = normalizeCollectionToken(series);
+  if (!ser) return '';
+  return `${sId}::${franchise || 'geral'}::${ser}`;
+}
+
+/**
+ * Reconciles dynamic collection lots across items from the SAME seller + character + series:
+ * - When >= 2 unsold single units share (sellerId, franchiseCategory, series), groups/updates them into an active Lot item and raises the lot price accordingly.
+ * - When 1 unit inside a lot is sold or removed, removes that unit's value, covers, and issue from the lot.
+ * - When < 2 unsold units remain in a dynamic lot, marks that lot wrapper as sold so remaining single unit sells independently.
+ */
+export function reconcileCollectionLots(
+  hqs: HQItem[],
+  targetGroupKeys?: Set<string>,
+  previousHqs?: HQItem[]
+): HQItem[] {
+  const result = hqs.map((item) => ({ ...item }));
+
+  // Identify all candidate group keys present
+  const groupKeysSet = new Set<string>();
+  result.forEach((item) => {
+    const key = buildCollectionGroupKey(item.sellerId, item.franchiseCategory, item.series);
+    if (!key) return;
+    if (!targetGroupKeys || targetGroupKeys.has(key) || (item.isCollection && item.allowsUnitPurchase && item.lotGroupId)) {
+      groupKeysSet.add(key);
+    }
+  });
+
+  const extraLotsToPrepend: HQItem[] = [];
+
+  for (const key of groupKeysSet) {
+    const matchingIndices: number[] = [];
+    result.forEach((item, idx) => {
+      if (buildCollectionGroupKey(item.sellerId, item.franchiseCategory, item.series) === key) {
+        matchingIndices.push(idx);
+      }
+    });
+
+    if (matchingIndices.length === 0) continue;
+
+    const groupItems = matchingIndices.map((idx) => result[idx]);
+    const activeUnits = groupItems
+      .filter((item) => !item.isCollection && !item.sold)
+      .sort((a, b) => formatIssueLabel(a.issueNumber).localeCompare(formatIssueLabel(b.issueNumber), undefined, { numeric: true }));
+
+    // Closed lot_only bundles without linked unit items remain untouched
+    const dynamicLots = groupItems.filter(
+      (item) => item.isCollection && item.allowsUnitPurchase !== false && (Boolean(item.lotGroupId) || activeUnits.length >= 2)
+    );
+    const activeLot = dynamicLots.find((l) => !l.sold) || dynamicLots[0];
+
+    // Check if there was explicit bundle discount ratio from previousHqs
+    const prevSource = previousHqs || hqs;
+    const prevGroupItems = prevSource.filter(
+      (item) => buildCollectionGroupKey(item.sellerId, item.franchiseCategory, item.series) === key
+    );
+    const prevActiveUnits = prevGroupItems.filter((item) => !item.isCollection && !item.sold);
+    const prevActiveLot = prevGroupItems.find(
+      (item) => item.isCollection && !item.sold && item.allowsUnitPurchase !== false
+    );
+    const prevUnitsSum = prevActiveUnits.reduce(
+      (sum, u) => sum + (Number(u.unitPrice ?? u.price) || 0),
+      0
+    );
+    const prevLotPrice = prevActiveLot ? Number(prevActiveLot.bundlePrice ?? prevActiveLot.price) : 0;
+    const discountRatio =
+      prevActiveLot && prevUnitsSum > 0 && prevLotPrice > 0
+        ? Math.min(1, Math.max(0.3, prevLotPrice / prevUnitsSum))
+        : 1;
+
+    if (activeUnits.length >= 2) {
+      const slug = normalizeCollectionToken(key).replace(/[^a-z0-9]+/g, '-').slice(0, 40);
+      const lotGroupId =
+        activeLot?.lotGroupId ||
+        activeUnits.find((u) => u.lotGroupId)?.lotGroupId ||
+        `lot-${slug}`;
+
+      // Attach lotGroupId to every active unit in the group
+      matchingIndices.forEach((idx) => {
+        if (!result[idx].isCollection && !result[idx].sold) {
+          result[idx] = { ...result[idx], lotGroupId };
+        }
+      });
+
+      const activeIssues = activeUnits.map((u) => formatIssueLabel(u.issueNumber));
+      const sumUnits = Number(
+        activeUnits.reduce((sum, u) => sum + (Number(u.unitPrice ?? u.price) || 0), 0).toFixed(2)
+      );
+      const newLotPrice = Number(Math.max(1, sumUnits * discountRatio).toFixed(2));
+      const avgUnitPrice = Number((sumUnits / activeUnits.length).toFixed(2));
+
+      const uniqueImages: string[] = [];
+      activeUnits.forEach((u) => {
+        (u.images || []).forEach((img) => {
+          if (img && !uniqueImages.includes(img) && uniqueImages.length < 10) {
+            uniqueImages.push(img);
+          }
+        });
+      });
+
+      const baseSample = activeUnits[0];
+      const baseSeriesName = baseSample.series || baseSample.franchiseCategory || 'Coleção';
+      const lotTitle = `${baseSeriesName} — Lote (${activeUnits.length} itens)`;
+      const lotIssueLabel = activeIssues.join(', ');
+      const soldIssuesInGroup = groupItems
+        .filter((item) => !item.isCollection && item.sold)
+        .map((u) => formatIssueLabel(u.issueNumber));
+
+      if (activeLot) {
+        const lotIdx = result.findIndex((r) => r.id === activeLot.id);
+        if (lotIdx !== -1) {
+          result[lotIdx] = {
+            ...result[lotIdx],
+            title: lotTitle,
+            issueNumber: lotIssueLabel,
+            price: newLotPrice,
+            bundlePrice: newLotPrice,
+            unitPrice: avgUnitPrice,
+            collectionCount: activeUnits.length,
+            allowsUnitPurchase: true,
+            isCollection: true,
+            lotGroupId,
+            soldIssues: soldIssuesInGroup,
+            sold: false,
+            images: uniqueImages.length > 0 ? uniqueImages : result[lotIdx].images,
+            year: Math.min(...activeUnits.map((u) => Number(u.year) || 2000)),
+          };
+        }
+      } else {
+        extraLotsToPrepend.push({
+          id: `hq-lot-${slug}-${Date.now()}`,
+          title: lotTitle,
+          description: `Lote completo da coleção ${baseSeriesName} (${baseSample.franchiseCategory}) reunindo ${activeUnits.length} itens disponíveis de ${baseSample.sellerName}.`,
+          publisher: baseSample.publisher,
+          series: baseSample.series,
+          franchiseCategory: baseSample.franchiseCategory,
+          issueNumber: lotIssueLabel,
+          year: Math.min(...activeUnits.map((u) => Number(u.year) || 2000)),
+          condition: baseSample.condition,
+          conditionDetails: baseSample.conditionDetails || '',
+          hasAllPages: true,
+          cleaningNote: baseSample.cleaningNote || 'Item inspecionado e conferido',
+          price: newLotPrice,
+          unitPrice: avgUnitPrice,
+          bundlePrice: newLotPrice,
+          allowsUnitPurchase: true,
+          maxDiscountPercent: baseSample.maxDiscountPercent ?? null,
+          isRareSpecial1Real: false,
+          isCollection: true,
+          collectionCount: activeUnits.length,
+          lotGroupId,
+          soldIssues: soldIssuesInGroup,
+          images: uniqueImages,
+          sellerId: baseSample.sellerId,
+          sellerName: baseSample.sellerName,
+          sellerAddress: '',
+          sellerCep: '',
+          featured: true,
+          sold: false,
+          createdAt: new Date().toISOString(),
+        });
+      }
+    } else {
+      // Fewer than 2 unsold units remain: dissolve dynamic lot wrapper if present so standalone unit sells alone
+      dynamicLots.forEach((lot) => {
+        if (lot.lotGroupId) {
+          const lotIdx = result.findIndex((r) => r.id === lot.id);
+          if (lotIdx !== -1 && !result[lotIdx].sold) {
+            result[lotIdx] = {
+              ...result[lotIdx],
+              collectionCount: activeUnits.length,
+              sold: true,
+            };
+          }
+        }
+      });
+    }
+  }
+
+  return [...extraLotsToPrepend, ...result];
 }
 
 export interface PostalFreightOption {

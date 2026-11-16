@@ -1,6 +1,6 @@
 {
-  "name": "HQ Master - Loja & Acervo Especializado de Quadrinhos",
-  "description": "HQ Master: Plataforma de quadrinhos, formatinhos clássicos e coleções completas com IA de reconhecimento visual de capas, gestão de colaboradores e checkout integrado.",
+  "name": "Geek Grid",
+  "description": "Geek Grid: Loja e catálogo inteligente de quadrinhos, livros, action figures e colecionáveis.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

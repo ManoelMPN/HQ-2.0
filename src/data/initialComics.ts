@@ -1,17 +1,17 @@
 import { HQItem, Seller } from '../types.ts';
 
-// Master Administrator (Store Owner: Neto - HQ Master)
+// Master Administrator (Store Owner: Neto - Geek Grid)
 export const INITIAL_SELLERS: Seller[] = [
   {
     id: 'master',
     name: 'Neto',
-    storeName: 'HQ Master',
+    storeName: 'Geek Grid',
     email: 'neto.mmp@gmail.com',
     role: 'master',
     password: 'admin',
     phone: '',
     cpfCnpj: '',
-    cep: '01310-100', // CEP padrão da HQ Master (ajustável no painel)
+    cep: '01310-100', // CEP padrão da Geek Grid (ajustável no painel)
     address: 'São Paulo - SP',
     street: 'Avenida Paulista',
     number: '',

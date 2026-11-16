@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   formatBRL,
+  formatIssueLabel,
   getConditionInfo,
   normalizeFranchiseName,
   groupHQsByFranchise,
@@ -12,6 +13,8 @@ import {
   evaluateOfferAgainstPolicy,
   calculateAccurateFreight,
   parseIssueNumbersFromRange,
+  buildCollectionGroupKey,
+  reconcileCollectionLots,
   MIN_ORDER_VALUE,
 } from './comicLogic.ts';
 import { HQItem, CartItem, FilterState } from '../types.ts';
@@ -113,8 +116,16 @@ test('getConditionInfo returns valid grades and assurances', () => {
   assert.ok(otimo.fullDesc.includes('Todas as páginas intactas'));
 
   const leitura = getConditionInfo('leitura');
-  assert.equal(leitura.label, 'Apenas para Leitura (Brechó HQ)');
+  assert.equal(leitura.label, 'Apenas para Leitura');
   assert.ok(leitura.fullDesc.includes('100% das páginas'));
+});
+
+test('formatIssueLabel normalizes cover issue and edition numbers without double hashes', () => {
+  assert.equal(formatIssueLabel('##01'), '#01');
+  assert.equal(formatIssueLabel('12'), '#12');
+  assert.equal(formatIssueLabel('#01 ao #29'), '#01 ao #29');
+  assert.equal(formatIssueLabel('Vol. 3'), 'Vol. 3');
+  assert.equal(formatIssueLabel(''), 'Única');
 });
 
 test('normalizeFranchiseName groups hero names dynamically', () => {
@@ -271,4 +282,128 @@ test('filterHQs hides sold items and parseIssueNumbersFromRange expands ranges p
   assert.deepEqual(parseIssueNumbersFromRange('1-3', 3), ['#01', '#02', '#03']);
   assert.deepEqual(parseIssueNumbersFromRange('#02, #07, #12', 3), ['#02', '#07', '#12']);
   assert.deepEqual(parseIssueNumbersFromRange('', 3), ['#01', '#02', '#03']);
+});
+
+test('reconcileCollectionLots groups only same seller + character + series and updates price dynamically on additions and sales', () => {
+  const baseUnit: Omit<HQItem, 'id' | 'issueNumber' | 'price' | 'sellerId' | 'series' | 'franchiseCategory'> = {
+    title: 'Homem-Aranha 2099',
+    description: 'Edição clássica',
+    publisher: 'Editora Abril',
+    year: 1994,
+    condition: 'bom',
+    hasAllPages: true,
+    cleaningNote: 'Conferido',
+    isCollection: false,
+    images: ['cover-a.jpg'],
+    sellerName: 'Geek Grid',
+    createdAt: '2026-01-01T00:00:00Z',
+  };
+
+  const u1: HQItem = {
+    ...baseUnit,
+    id: 'u1',
+    title: 'Homem-Aranha 2099 #01',
+    franchiseCategory: 'Homem-Aranha',
+    series: 'Homem-Aranha 2099',
+    issueNumber: '#01',
+    price: 20,
+    unitPrice: 20,
+    sellerId: 'master',
+    images: ['c1.jpg'],
+  };
+
+  // Same seller, same character, DIFFERENT series -> must NOT group
+  const diffSeries: HQItem = {
+    ...baseUnit,
+    id: 'u-diff-series',
+    title: 'O Espetacular Homem-Aranha #10',
+    franchiseCategory: 'Homem-Aranha',
+    series: 'O Espetacular Homem-Aranha',
+    issueNumber: '#10',
+    price: 30,
+    unitPrice: 30,
+    sellerId: 'master',
+    images: ['c-diff.jpg'],
+  };
+
+  // DIFFERENT seller, same character + same series -> must NOT group
+  const diffSeller: HQItem = {
+    ...baseUnit,
+    id: 'u-diff-seller',
+    title: 'Homem-Aranha 2099 #01',
+    franchiseCategory: 'Homem-Aranha',
+    series: 'Homem-Aranha 2099',
+    issueNumber: '#01',
+    price: 22,
+    unitPrice: 22,
+    sellerId: 'partner-99',
+    sellerName: 'Outro Vendedor',
+    images: ['c-other.jpg'],
+  };
+
+  // Day 1: 1 item per group -> 0 lots created
+  const keyMaster2099 = buildCollectionGroupKey('master', 'Homem-Aranha', 'Homem-Aranha 2099');
+  const day1 = reconcileCollectionLots([u1, diffSeries, diffSeller], new Set([keyMaster2099]));
+  assert.equal(day1.filter((i) => i.isCollection && !i.sold).length, 0);
+
+  // Day 2: seller adds #02 of Homem-Aranha 2099 -> auto-groups into 2-item lot of R$ 45
+  const u2: HQItem = {
+    ...baseUnit,
+    id: 'u2',
+    title: 'Homem-Aranha 2099 #02',
+    franchiseCategory: 'Homem-Aranha',
+    series: 'Homem-Aranha 2099',
+    issueNumber: '#02',
+    price: 25,
+    unitPrice: 25,
+    sellerId: 'master',
+    images: ['c2.jpg'],
+  };
+
+  const day2 = reconcileCollectionLots([u2, ...day1], new Set([keyMaster2099]), day1);
+  const lotDay2 = day2.find((i) => i.isCollection && !i.sold);
+  assert.ok(lotDay2);
+  assert.equal(lotDay2.collectionCount, 2);
+  assert.equal(lotDay2.price, 45);
+  assert.equal(lotDay2.sellerId, 'master');
+  assert.equal(lotDay2.issueNumber, '#01, #02');
+
+  // Day 3: seller scans #03 of same collection (R$ 30) -> lot price rises to R$ 75
+  const u3: HQItem = {
+    ...baseUnit,
+    id: 'u3',
+    title: 'Homem-Aranha 2099 #03',
+    franchiseCategory: 'Homem-Aranha',
+    series: 'Homem-Aranha 2099',
+    issueNumber: '#03',
+    price: 30,
+    unitPrice: 30,
+    sellerId: 'master',
+    images: ['c3.jpg'],
+  };
+
+  const day3 = reconcileCollectionLots([u3, ...day2], new Set([keyMaster2099]), day2);
+  const lotDay3 = day3.find((i) => i.isCollection && !i.sold);
+  assert.ok(lotDay3);
+  assert.equal(lotDay3.collectionCount, 3);
+  assert.equal(lotDay3.price, 75);
+  assert.equal(lotDay3.issueNumber, '#01, #02, #03');
+
+  // Buyer buys #02 (R$ 25) -> lot updates removing #02, price becomes R$ 50
+  const afterSalePreReconcile = day3.map((i) => (i.id === 'u2' ? { ...i, sold: true } : i));
+  const afterSale = reconcileCollectionLots(afterSalePreReconcile, new Set([keyMaster2099]), day3);
+  const lotAfterSale = afterSale.find((i) => i.isCollection && !i.sold);
+  assert.ok(lotAfterSale);
+  assert.equal(lotAfterSale.collectionCount, 2);
+  assert.equal(lotAfterSale.price, 50);
+  assert.equal(lotAfterSale.issueNumber, '#01, #03');
+
+  // Buyer buys #01 (R$ 20) -> only 1 item (#03) remains, so dynamic lot closes
+  const afterSecondSale = reconcileCollectionLots(
+    afterSale.map((i) => (i.id === 'u1' ? { ...i, sold: true } : i)),
+    new Set([keyMaster2099]),
+    afterSale
+  );
+  assert.equal(afterSecondSale.filter((i) => i.isCollection && !i.sold).length, 0);
+  assert.equal(afterSecondSale.find((i) => i.id === 'u3')?.sold, undefined);
 });

@@ -1,18 +1,19 @@
 import React, { useState, useEffect } from 'react';
 import {
-  BookOpen,
-  Sparkles,
-  Flame,
-  Layers,
   Search,
-  CheckCircle2,
-  Lock,
+  MessageSquare,
+  ArrowRight,
+  SlidersHorizontal,
 } from 'lucide-react';
 import { HQItem, Seller, CartItem, FilterState, DiscountProposal, Order } from './types.ts';
 import { INITIAL_HQS, INITIAL_SELLERS } from './data/initialComics.ts';
-import { filterHQs, formatBRL } from './utils/comicLogic.ts';
+import {
+  filterHQs,
+  formatBRL,
+  buildCollectionGroupKey,
+  reconcileCollectionLots,
+} from './utils/comicLogic.ts';
 import { Header } from './components/Header.tsx';
-import { ShowcaseCarousel } from './components/ShowcaseCarousel.tsx';
 import { ComicFilters } from './components/ComicFilters.tsx';
 import { HQCard } from './components/HQCard.tsx';
 import { HQDetailModal } from './components/HQDetailModal.tsx';
@@ -20,7 +21,7 @@ import { CartDrawer } from './components/CartDrawer.tsx';
 import { DiscountNegotiationModal } from './components/DiscountNegotiationModal.tsx';
 import { PartnerOnboardingModal } from './components/PartnerOnboardingModal.tsx';
 import { AdminPage } from './components/AdminPage.tsx';
-import { HQMasterLogo } from './components/HQMasterLogo.tsx';
+import { GeekGridLogo } from './components/HQMasterLogo.tsx';
 import {
   getSupabase,
   testSupabaseConnection,
@@ -48,6 +49,30 @@ export default function App() {
     }
     return 'store';
   });
+
+  // Light / Dark theme state
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
+    if (typeof window === 'undefined') return 'dark';
+    const saved = localStorage.getItem('geekgrid_theme');
+    return saved === 'light' || saved === 'dark' ? saved : 'dark';
+  });
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    const root = document.documentElement;
+    root.classList.remove('light', 'dark');
+    root.classList.add(theme);
+    root.dataset.theme = theme;
+    try {
+      localStorage.setItem('geekgrid_theme', theme);
+    } catch {
+      // Ignore storage quota issues
+    }
+  }, [theme]);
+
+  const handleToggleTheme = () => {
+    setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
+  };
 
   // State initialization with localStorage persistence
   const [hqs, setHqs] = useState<HQItem[]>(() => {
@@ -343,7 +368,6 @@ export default function App() {
 
   // Filtered HQs
   const filteredHQs = filterHQs(hqs, filters);
-  const featuredHQs = activeHQs.filter((h) => h.featured);
 
   // Cart actions
   const handleAddToCart = (hq: HQItem, selectedIssues?: string[]) => {
@@ -393,19 +417,46 @@ export default function App() {
     setCart([]);
   };
 
-  // HQ Management (State + Supabase Cloud Persistence)
-  const handleAddHQ = (newHQData: Omit<HQItem, 'id' | 'createdAt'>) => {
+  const persistChangedHQs = (prevList: HQItem[], nextList: HQItem[]) => {
+    const prevMap = new Map(prevList.map((item) => [item.id, item]));
+    nextList.forEach((nextItem) => {
+      const prevItem = prevMap.get(nextItem.id);
+      const isChanged =
+        !prevItem ||
+        prevItem.price !== nextItem.price ||
+        prevItem.bundlePrice !== nextItem.bundlePrice ||
+        prevItem.unitPrice !== nextItem.unitPrice ||
+        prevItem.collectionCount !== nextItem.collectionCount ||
+        prevItem.sold !== nextItem.sold ||
+        prevItem.title !== nextItem.title ||
+        prevItem.issueNumber !== nextItem.issueNumber ||
+        prevItem.lotGroupId !== nextItem.lotGroupId ||
+        prevItem.allowsUnitPurchase !== nextItem.allowsUnitPurchase ||
+        (prevItem.soldIssues?.length || 0) !== (nextItem.soldIssues?.length || 0) ||
+        (prevItem.images?.length || 0) !== (nextItem.images?.length || 0);
+      if (isChanged) {
+        void upsertHQToSupabase(nextItem);
+      }
+    });
+  };
+
+  // HQ Management (State + Dynamic Lot Grouping + Supabase Cloud Persistence)
+  const handleAddHQ = (newHQData: Omit<HQItem, 'id' | 'createdAt'>, autoGroupWithSeries = true) => {
     const newHQ: HQItem = {
       ...newHQData,
-      id: `hq-${Date.now()}`,
+      id: `hq-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       createdAt: new Date().toISOString(),
     };
-    setHqs((prev) => [newHQ, ...prev]);
+    const groupKey = buildCollectionGroupKey(newHQ.sellerId, newHQ.franchiseCategory, newHQ.series);
 
-    void upsertHQToSupabase(newHQ).then((res) => {
-      if (res.ok && res.hq) {
-        setHqs((prev) => prev.map((item) => (item.id === newHQ.id ? res.hq : item)));
-      }
+    setHqs((prev) => {
+      const combined = [newHQ, ...prev];
+      const next =
+        autoGroupWithSeries && groupKey && !newHQ.isCollection
+          ? reconcileCollectionLots(combined, new Set([groupKey]), prev)
+          : combined;
+      persistChangedHQs(prev, next);
+      return next;
     });
   };
 
@@ -417,10 +468,20 @@ export default function App() {
       createdAt: new Date(baseTs + idx).toISOString(),
     }));
 
-    setHqs((prev) => [...createdBatch, ...prev]);
+    const affectedKeys = new Set<string>();
+    createdBatch.forEach((item) => {
+      const key = buildCollectionGroupKey(item.sellerId, item.franchiseCategory, item.series);
+      if (key) affectedKeys.add(key);
+    });
 
-    createdBatch.forEach((createdItem) => {
-      void upsertHQToSupabase(createdItem);
+    setHqs((prev) => {
+      const combined = [...createdBatch, ...prev];
+      const next =
+        affectedKeys.size > 0
+          ? reconcileCollectionLots(combined, affectedKeys, prev)
+          : combined;
+      persistChangedHQs(prev, next);
+      return next;
     });
   };
 
@@ -431,8 +492,23 @@ export default function App() {
       return;
     }
     const sanitized: HQItem = { ...updated, sellerAddress: '', sellerCep: '' };
-    setHqs((prev) => prev.map((h) => (h.id === sanitized.id ? sanitized : h)));
-    void upsertHQToSupabase(sanitized);
+    const affectedKeys = new Set<string>();
+    if (existing) {
+      const oldKey = buildCollectionGroupKey(existing.sellerId, existing.franchiseCategory, existing.series);
+      if (oldKey) affectedKeys.add(oldKey);
+    }
+    const newKey = buildCollectionGroupKey(sanitized.sellerId, sanitized.franchiseCategory, sanitized.series);
+    if (newKey) affectedKeys.add(newKey);
+
+    setHqs((prev) => {
+      const mapped = prev.map((h) => (h.id === sanitized.id ? sanitized : h));
+      const next =
+        !sanitized.isCollection && affectedKeys.size > 0
+          ? reconcileCollectionLots(mapped, affectedKeys, prev)
+          : mapped;
+      persistChangedHQs(prev, next);
+      return next;
+    });
   };
 
   const handleDeleteHQ = (id: string) => {
@@ -441,7 +517,18 @@ export default function App() {
       alert('Você só tem permissão para remover os seus próprios anúncios.');
       return;
     }
-    setHqs((prev) => prev.filter((h) => h.id !== id));
+    const groupKey = existing
+      ? buildCollectionGroupKey(existing.sellerId, existing.franchiseCategory, existing.series)
+      : '';
+
+    setHqs((prev) => {
+      const filtered = prev.filter((h) => h.id !== id);
+      const next = groupKey
+        ? reconcileCollectionLots(filtered, new Set([groupKey]), prev)
+        : filtered;
+      persistChangedHQs(prev, next);
+      return next;
+    });
     void deleteHQFromSupabase(id);
   };
 
@@ -455,16 +542,41 @@ export default function App() {
 
   // Seller Management
   const handleAddSeller = (newSellerData: Omit<Seller, 'id' | 'totalSales' | 'totalEarnings' | 'active' | 'joinedAt'>) => {
+    const isPending = newSellerData.approvalStatus === 'pending';
     const newSeller: Seller = {
       ...newSellerData,
       id: `partner-${Date.now()}`,
+      approvalStatus: isPending ? 'pending' : 'approved',
       totalSales: 0,
       totalEarnings: 0,
-      active: true,
+      active: !isPending,
       joinedAt: new Date().toISOString(),
     };
     setSellers((prev) => [...prev, newSeller]);
     void upsertSellerToSupabase(newSeller);
+  };
+
+  const handleApproveSeller = (sellerId: string, password: string) => {
+    const cleanPass = password.trim();
+    if (!cleanPass) return;
+    let updatedRef: Seller | null = null;
+    setSellers((prev) =>
+      prev.map((s) => {
+        if (s.id === sellerId) {
+          updatedRef = {
+            ...s,
+            password: cleanPass,
+            active: true,
+            approvalStatus: 'approved',
+          };
+          return updatedRef;
+        }
+        return s;
+      })
+    );
+    if (updatedRef) {
+      void upsertSellerToSupabase(updatedRef);
+    }
   };
 
   const handleDeleteSeller = (id: string) => {
@@ -493,9 +605,9 @@ export default function App() {
 
   const handleUpdateOwnerProfile = (updatedSeller: Seller) => {
     setSellers((prev) =>
-      prev.map((s) => (s.id === updatedSeller.id || s.role === 'master' ? updatedSeller : s))
+      prev.map((s) => (s.id === updatedSeller.id ? updatedSeller : s))
     );
-    if (currentSeller && (currentSeller.id === updatedSeller.id || currentSeller.role === 'master')) {
+    if (currentSeller && currentSeller.id === updatedSeller.id) {
       setCurrentSeller(updatedSeller);
     }
     void upsertSellerToSupabase(updatedSeller);
@@ -520,9 +632,15 @@ export default function App() {
       return false;
     }
 
-    // Collaborator partner login
+    // Collaborator partner login (must be approved, active, and have a password set by Master)
     const matched = sellers.find(
-      (s) => s.email.toLowerCase() === trimmedEmail && s.password === pass
+      (s) =>
+        s.role !== 'master' &&
+        s.email.toLowerCase() === trimmedEmail &&
+        Boolean(s.password) &&
+        s.password === pass &&
+        s.active !== false &&
+        s.approvalStatus !== 'pending'
     );
     if (matched) {
       setCurrentSeller(matched);
@@ -572,7 +690,7 @@ export default function App() {
     const pixKey = master?.pixKey || 'neto.mmp@gmail.com';
     const paymentLink = autoApprove && origin ? `${origin}/?proposta=${id}#loja` : '';
     const pixCopiaECola = autoApprove
-      ? `00020126580014BR.GOV.BCB.PIX0136${pixKey}520400005303986540${Number(data.proposedTotal).toFixed(2)}5802BR5915HQ MASTER COMICS6009SAO PAULO62070503***6304`
+      ? `00020126580014BR.GOV.BCB.PIX0136${pixKey}520400005303986540${Number(data.proposedTotal).toFixed(2)}5802BR5909GEEK GRID6009SAO PAULO62070503***6304`
       : '';
 
     const newProposal: DiscountProposal = {
@@ -638,7 +756,7 @@ export default function App() {
         const pixCopiaECola =
           newStatus === 'approved'
             ? prop.pixCopiaECola ||
-              `00020126580014BR.GOV.BCB.PIX0136${pixKey}520400005303986540${Number(prop.proposedTotal).toFixed(2)}5802BR5915HQ MASTER COMICS6009SAO PAULO62070503***6304`
+              `00020126580014BR.GOV.BCB.PIX0136${pixKey}520400005303986540${Number(prop.proposedTotal).toFixed(2)}5802BR5909GEEK GRID6009SAO PAULO62070503***6304`
             : prop.pixCopiaECola;
 
         updatedProp = {
@@ -718,8 +836,8 @@ export default function App() {
         }
       });
 
-      const changedToPersist: HQItem[] = [];
-      const nextHqs = prev.map((hq) => {
+      const affectedGroupKeys = new Set<string>();
+      const preReconciledHqs = prev.map((hq) => {
         let modified = false;
         let next = hq;
 
@@ -741,12 +859,18 @@ export default function App() {
           modified = true;
         }
 
-        // 4. Parent Lot updated when individual issues are sold (either via HQDetailModal or standalone unit HQ)
+        // 4. For legacy unlinked collections without separate unit HQs, adjust bundle price directly
+        const hasLinkedUnitsInGroup = prev.some(
+          (other) =>
+            !other.isCollection &&
+            buildCollectionGroupKey(other.sellerId, other.franchiseCategory, other.series) ===
+              buildCollectionGroupKey(hq.sellerId, hq.franchiseCategory, hq.series)
+        );
         const issuesSoldForThisLot = [
           ...(boughtLotIssuesMap[hq.id] || []),
           ...(hq.isCollection && hq.lotGroupId ? soldUnitIssuesByGroup[hq.lotGroupId] || [] : []),
         ];
-        if (hq.isCollection && issuesSoldForThisLot.length > 0 && !next.sold) {
+        if (!hasLinkedUnitsInGroup && hq.isCollection && issuesSoldForThisLot.length > 0 && !next.sold) {
           const prevSold = new Set(hq.soldIssues || []);
           const uniqueNew = Array.from(new Set(issuesSoldForThisLot)).filter((iss) => !prevSold.has(iss));
           if (uniqueNew.length > 0) {
@@ -769,15 +893,20 @@ export default function App() {
           }
         }
 
-        if (modified) changedToPersist.push(next);
+        if (modified) {
+          const gKey = buildCollectionGroupKey(hq.sellerId, hq.franchiseCategory, hq.series);
+          if (gKey) affectedGroupKeys.add(gKey);
+        }
         return next;
       });
 
-      changedToPersist.forEach((changed) => {
-        void upsertHQToSupabase(changed);
-      });
+      const reconciledHqs =
+        affectedGroupKeys.size > 0
+          ? reconcileCollectionLots(preReconciledHqs, affectedGroupKeys, prev)
+          : preReconciledHqs;
 
-      return nextHqs;
+      persistChangedHQs(prev, reconciledHqs);
+      return reconciledHqs;
     });
   };
 
@@ -814,12 +943,19 @@ export default function App() {
   };
 
   const masterSeller = sellers.find((s) => s.role === 'master') || sellers[0];
+  const cartSellerIds = Array.from(new Set(cart.map((c) => c.hq.sellerId).filter(Boolean)));
+  const activeCartSeller =
+    cartSellerIds.length === 1
+      ? sellers.find((s) => s.id === cartSellerIds[0]) || masterSeller
+      : masterSeller;
 
   // 1. DEDICATED ADMIN PAGE VIEW
   if (currentView === 'admin') {
     return (
       <AdminPage
         onBackToStore={() => navigateTo('store')}
+        theme={theme}
+        onToggleTheme={handleToggleTheme}
         hqs={hqs}
         onAddHQ={handleAddHQ}
         onAddHQsBatch={handleAddBatchHQs}
@@ -829,6 +965,7 @@ export default function App() {
         onClearDemoHQs={handleClearDemoHQs}
         sellers={sellers}
         onAddSeller={handleAddSeller}
+        onApproveSeller={handleApproveSeller}
         onDeleteSeller={handleDeleteSeller}
         onUpdateSellerPassword={handleUpdateSellerPassword}
         onUpdateOwnerProfile={handleUpdateOwnerProfile}
@@ -849,7 +986,7 @@ export default function App() {
 
   // 2. USER STOREFRONT VIEW
   return (
-    <div className="min-h-screen bg-[#0b0d13] text-zinc-100 flex flex-col font-['Inter']">
+    <div className="min-h-screen bg-[var(--gg-bg)] text-[var(--gg-text)] flex flex-col transition-colors">
       {/* Header */}
       <Header
         cart={cart}
@@ -860,111 +997,13 @@ export default function App() {
         onOpenPartnerModal={() => setIsPartnerModalOpen(true)}
         currentSeller={currentSeller}
         onLogoutSeller={handleLogoutSeller}
+        theme={theme}
+        onToggleTheme={handleToggleTheme}
       />
 
-      {/* Main Storefront Body */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-6 sm:py-8 space-y-6">
-        {/* Hero Section */}
-        <section className="relative rounded-3xl overflow-hidden bg-gradient-to-br from-zinc-900 via-[#131722] to-zinc-950 border border-zinc-800 p-6 sm:p-10 shadow-2xl">
-          <div className="absolute right-0 top-0 bottom-0 w-1/2 opacity-10 pointer-events-none bg-[radial-gradient(#f59e0b_1.5px,transparent_1.5px)] [background-size:16px_16px]" />
-
-          <div className="relative z-10 max-w-2xl space-y-4">
-            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs font-bold tracking-wide">
-              <Sparkles className="w-3.5 h-3.5" />
-              Acervo Especializado em Revistas em Quadrinhos Clássicas & Coleções
-            </div>
-
-            <h1 className="text-3xl sm:text-5xl font-black text-white font-['Space_Grotesk'] tracking-tight leading-none">
-              O Acervo Histórico dos Quadrinhos
-            </h1>
-
-            <p className="text-sm sm:text-base text-zinc-300 leading-relaxed">
-              Explore formatinhos históricos da Editora Abril, sagas completas da Panini e achados nostálgicos. 
-              Catalogadas com avaliação rigorosa e garantia incondicional de 100% de páginas completas.
-            </p>
-
-            <div className="flex flex-wrap items-center gap-2.5 pt-2">
-              <button
-                onClick={() => setFilters((prev) => ({ ...prev, onlyOneReal: true, franchise: 'all', publisher: 'all' }))}
-                className="bg-rose-600 hover:bg-rose-500 text-white font-black px-4 py-2.5 rounded-xl text-xs flex items-center gap-2 shadow-lg shadow-rose-950/50 transition-transform active:scale-95"
-              >
-                <Flame className="w-4 h-4 fill-current" />
-                HQs de Leitura a partir de R$ 1,00
-              </button>
-
-              <button
-                onClick={() => setFilters((prev) => ({ ...prev, type: 'collection', onlyOneReal: false }))}
-                className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold px-4 py-2.5 rounded-xl text-xs flex items-center gap-2 shadow-lg transition-transform active:scale-95"
-              >
-                <Layers className="w-4 h-4" />
-                Lotes & Coleções Fechadas
-              </button>
-
-              <button
-                onClick={() => navigateTo('admin')}
-                className="bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 font-bold px-4 py-2.5 rounded-xl text-xs flex items-center gap-2 transition-colors"
-              >
-                <Lock className="w-4 h-4 text-amber-400" />
-                Acesso do Lojista
-              </button>
-            </div>
-          </div>
-        </section>
-
-        {/* Showcase of Top Covers */}
-        <ShowcaseCarousel
-          featuredHQs={featuredHQs}
-          onSelectHQ={(hq) => setSelectedHQ(hq)}
-          onAddToCart={handleAddToCart}
-        />
-
-        {/* Dynamic Category Quick-Pills */}
-        <section className="space-y-2">
-          <div className="flex items-center justify-between text-xs text-zinc-400 px-1">
-            <span className="font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
-              <BookOpen className="w-4 h-4 text-amber-400" />
-              Coleções & Personagens no Acervo
-            </span>
-            <span className="text-[11px]">Selecione para filtrar instantaneamente</span>
-          </div>
-
-          <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-none">
-            <button
-              onClick={() => setFilters((prev) => ({ ...prev, franchise: 'all' }))}
-              className={`px-3.5 py-1.5 rounded-full text-xs font-bold shrink-0 transition-all ${
-                filters.franchise === 'all'
-                  ? 'bg-amber-500 text-black shadow-md'
-                  : 'bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border border-zinc-800'
-              }`}
-            >
-              Todas as Coleções ({activeHQs.length})
-            </button>
-
-            {availableFranchises.map((franchise) => {
-              const count = activeHQs.filter((h) => h.franchiseCategory === franchise).length;
-              const isSelected = filters.franchise === franchise;
-
-              return (
-                <button
-                  key={franchise}
-                  onClick={() => setFilters((prev) => ({ ...prev, franchise: isSelected ? 'all' : franchise }))}
-                  className={`px-3.5 py-1.5 rounded-full text-xs font-bold shrink-0 flex items-center gap-1.5 transition-all ${
-                    isSelected
-                      ? 'bg-amber-500 text-black shadow-md'
-                      : 'bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border border-zinc-800'
-                  }`}
-                >
-                  <span>{franchise}</span>
-                  <span className={`text-[10px] px-1.5 py-0.2 rounded-full ${isSelected ? 'bg-black text-amber-300' : 'bg-zinc-800 text-zinc-400'}`}>
-                    {count}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        </section>
-
-        {/* Filters Panel on same page */}
+      {/* Main Storefront Body — Straight into Filters & Catalog */}
+      <main className="flex-1 max-w-7xl w-full mx-auto px-3 sm:px-6 py-5 sm:py-6 space-y-5 sm:space-y-6">
+        {/* Filters Panel at the top */}
         <ComicFilters
           filters={filters}
           onUpdateFilters={(updates) => setFilters((prev) => ({ ...prev, ...updates }))}
@@ -984,33 +1023,79 @@ export default function App() {
           }
           availablePublishers={availablePublishers}
           availableFranchises={availableFranchises}
-          sellers={sellers.map((s) => ({ id: s.id, name: s.name, storeName: s.storeName }))}
+          sellers={sellers.filter((s) => s.active !== false).map((s) => ({ id: s.id, name: s.name, storeName: s.storeName }))}
           totalResultsCount={filteredHQs.length}
         />
 
-        {/* Main Grid of Comics */}
+        {/* Quick Collection / Category Tabs */}
+        <section className="space-y-2.5">
+          <div className="flex items-center justify-between text-xs text-[var(--gg-text-muted)] px-0.5">
+            <span className="font-semibold text-[var(--gg-text-strong)] flex items-center gap-1.5">
+              <SlidersHorizontal className="w-3.5 h-3.5 text-amber-500" />
+              Categorias & Coleções
+            </span>
+          </div>
+
+          <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-none">
+            <button
+              type="button"
+              onClick={() => setFilters((prev) => ({ ...prev, franchise: 'all' }))}
+              className={`px-3 py-1.5 rounded-xl text-xs font-semibold shrink-0 transition-colors border ${
+                filters.franchise === 'all'
+                  ? 'bg-amber-500 text-zinc-950 border-amber-400'
+                  : 'bg-[var(--gg-surface)] hover:bg-[var(--gg-surface-2)] text-[var(--gg-text)] border-[var(--gg-border)]'
+              }`}
+            >
+              Tudo ({activeHQs.length})
+            </button>
+
+            {availableFranchises.map((franchise) => {
+              const count = activeHQs.filter((h) => h.franchiseCategory === franchise).length;
+              const isSelected = filters.franchise === franchise;
+
+              return (
+                <button
+                  type="button"
+                  key={franchise}
+                  onClick={() => setFilters((prev) => ({ ...prev, franchise: isSelected ? 'all' : franchise }))}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-semibold shrink-0 flex items-center gap-1.5 transition-colors border ${
+                    isSelected
+                      ? 'bg-amber-500 text-zinc-950 border-amber-400'
+                      : 'bg-[var(--gg-surface)] hover:bg-[var(--gg-surface-2)] text-[var(--gg-text)] border-[var(--gg-border)]'
+                  }`}
+                >
+                  <span>{franchise}</span>
+                  <span className={`text-[10px] tabular-nums ${isSelected ? 'text-zinc-900 font-bold' : 'text-[var(--gg-text-subtle)]'}`}>
+                    {count}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </section>
+
+        {/* Main Grid of Items */}
         <section className="space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-xl font-black text-white font-['Space_Grotesk'] tracking-tight">
+          <div className="flex items-center justify-between gap-2">
+            <h1 className="font-display text-lg sm:text-xl font-bold text-[var(--gg-text-strong)] tracking-tight">
               {filters.franchise !== 'all'
-                ? `Coleção: ${filters.franchise}`
-                : filters.onlyOneReal
-                ? 'Achados de Leitura a partir de R$ 1,00'
-                : 'Acervo Disponível para Compra'}
-            </h2>
-            <span className="text-xs text-zinc-400">
-              {filteredHQs.length} {filteredHQs.length === 1 ? 'revista encontrada' : 'revistas encontradas'}
+                ? filters.franchise
+                : 'Catálogo Geek Grid'}
+            </h1>
+            <span className="text-xs text-[var(--gg-text-muted)] tabular-nums shrink-0">
+              {filteredHQs.length} {filteredHQs.length === 1 ? 'item encontrado' : 'itens encontrados'}
             </span>
           </div>
 
           {filteredHQs.length === 0 ? (
-            <div className="bg-zinc-900/60 border border-zinc-800 rounded-3xl p-12 text-center space-y-3">
-              <Search className="w-12 h-12 text-zinc-600 mx-auto" />
-              <h3 className="text-base font-bold text-white">Nenhuma HQ encontrada com esses filtros.</h3>
-              <p className="text-xs text-zinc-400 max-w-sm mx-auto">
-                Tente ajustar os filtros de editora, ano ou conservação para visualizar mais edições.
+            <div className="bg-[var(--gg-surface)] border border-[var(--gg-border)] rounded-2xl p-8 sm:p-12 text-center space-y-3">
+              <Search className="w-10 h-10 text-[var(--gg-text-subtle)] mx-auto" />
+              <h3 className="text-base font-bold text-[var(--gg-text-strong)]">Nenhum item encontrado com esses filtros.</h3>
+              <p className="text-xs text-[var(--gg-text-muted)] max-w-sm mx-auto">
+                Ajuste os filtros acima para visualizar outros itens disponíveis.
               </p>
               <button
+                type="button"
                 onClick={() =>
                   setFilters({
                     search: '',
@@ -1025,9 +1110,9 @@ export default function App() {
                     sortBy: 'featured',
                   })
                 }
-                className="bg-amber-500 hover:bg-amber-400 text-black font-bold px-4 py-2 rounded-xl text-xs transition-colors"
+                className="bg-amber-500 hover:bg-amber-400 text-zinc-950 font-bold px-4 py-2 rounded-xl text-xs transition-colors"
               >
-                Limpar Todos os Filtros
+                Limpar Filtros
               </button>
             </div>
           ) : (
@@ -1044,51 +1129,73 @@ export default function App() {
             </div>
           )}
         </section>
+
+        {/* Short Contact / Sell CTA */}
+        <section className="bg-[var(--gg-surface)] border border-[var(--gg-border)] rounded-2xl p-4 sm:p-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+          <div className="flex items-start sm:items-center gap-3">
+            <div className="p-2.5 rounded-xl bg-amber-500/15 text-[var(--gg-accent-text)] shrink-0">
+              <MessageSquare className="w-5 h-5" />
+            </div>
+            <div>
+              <h2 className="font-display text-sm sm:text-base font-bold text-[var(--gg-text-strong)]">
+                Quer ajuda para vender suas HQs, livros ou colecionáveis?
+              </h2>
+              <p className="text-xs text-[var(--gg-text-muted)]">
+                A gente te ajuda a catalogar e anunciar seu acervo.
+              </p>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setIsPartnerModalOpen(true)}
+            className="w-full sm:w-auto justify-center bg-amber-500 hover:bg-amber-400 text-zinc-950 font-bold px-4 py-2.5 rounded-xl text-xs flex items-center gap-1.5 shrink-0 transition-colors"
+          >
+            <span>Clique aqui para conversar</span>
+            <ArrowRight className="w-4 h-4" />
+          </button>
+        </section>
       </main>
 
       {/* Footer */}
-      <footer className="mt-16 bg-[#090b10] border-t border-zinc-800/80 py-10 px-4 sm:px-6 text-xs text-zinc-500">
+      <footer className="mt-12 sm:mt-14 bg-[var(--gg-footer)] border-t border-[var(--gg-border)] py-8 sm:py-10 px-4 sm:px-6 text-xs text-[var(--gg-text-subtle)] transition-colors">
         <div className="max-w-7xl mx-auto grid grid-cols-1 md:grid-cols-4 gap-8">
           <div className="space-y-3 md:col-span-2">
-            <HQMasterLogo size="md" />
-            <p className="text-zinc-400 leading-relaxed text-xs max-w-md">
-              Loja e acervo especializado em revistas em quadrinhos, formatinhos clássicos e coleções completas.
-              Catalogação inteligente e pagamento com checkout seguro.
-            </p>
-            <p className="text-[11px] text-zinc-500 pt-1">
-              Garantia de 100% das páginas preservadas para leitura integral em todas as edições.
+            <GeekGridLogo size="md" />
+            <p className="text-[var(--gg-text-muted)] leading-relaxed text-xs max-w-md">
+              Marketplace especializado em quadrinhos, mangás, livros, action figures e colecionáveis.
             </p>
           </div>
 
           <div className="space-y-2">
-            <h4 className="text-xs font-bold text-white uppercase tracking-wider">Acesso Rápido</h4>
-            <ul className="space-y-1.5 text-xs text-zinc-400">
+            <h4 className="text-xs font-bold text-[var(--gg-text-strong)] uppercase tracking-wider">Acesso Rápido</h4>
+            <ul className="space-y-1.5 text-xs text-[var(--gg-text-muted)]">
               <li>
-                <button onClick={() => navigateTo('admin')} className="hover:text-amber-300">
-                  Painel Administrativo
+                <button onClick={() => navigateTo('admin')} className="hover:text-[var(--gg-accent-text)]">
+                  Área do Lojista
                 </button>
               </li>
               <li>
-                <button onClick={() => setIsPartnerModalOpen(true)} className="hover:text-amber-300">
-                  Quero Anunciar no Acervo
+                <button onClick={() => setIsPartnerModalOpen(true)} className="hover:text-[var(--gg-accent-text)]">
+                  Fale Conosco / Quero Vender
                 </button>
               </li>
             </ul>
           </div>
 
           <div className="space-y-2">
-            <h4 className="text-xs font-bold text-white uppercase tracking-wider">Segurança & Entregas</h4>
-            <p className="text-xs text-zinc-400 leading-relaxed">
-              Pagamentos seguros via Mercado Pago (Pix e Cartão). Envios rastreados via Correios (PAC e SEDEX) para todo o Brasil.
+            <h4 className="text-xs font-bold text-[var(--gg-text-strong)] uppercase tracking-wider">Pagamentos & Envios</h4>
+            <p className="text-xs text-[var(--gg-text-muted)] leading-relaxed">
+              Pagamentos via PIX e checkout integrado. Envios rastreados pelos Correios para todo o Brasil.
             </p>
-            <div className="text-[11px] text-amber-400 font-semibold pt-1">
-              Pedido mínimo da loja: {formatBRL(30.0)}
+            <div className="text-[11px] text-[var(--gg-text-muted)] pt-1 tabular-nums">
+              Pedido mínimo: {formatBRL(30.0)}
             </div>
           </div>
         </div>
 
-        <div className="max-w-7xl mx-auto pt-8 mt-8 border-t border-zinc-900 text-center text-[11px] text-zinc-600">
-          © {new Date().getFullYear()} HQ Master. Todos os direitos reservados.
+        <div className="max-w-7xl mx-auto pt-8 mt-8 border-t border-[var(--gg-border)] text-center text-[11px] text-[var(--gg-text-subtle)]">
+          © {new Date().getFullYear()} Geek Grid. Todos os direitos reservados.
         </div>
       </footer>
 
@@ -1111,8 +1218,11 @@ export default function App() {
           setIsNegotiationOpen(true);
         }}
         onOrderCreated={handleOrderCreated}
-        storePixKey={masterSeller?.pixKey || 'neto.mmp@gmail.com'}
-        sellerOriginCep={masterSeller?.cep || '01310-100'}
+        storePixKey={activeCartSeller?.pixKey || masterSeller?.pixKey || 'neto.mmp@gmail.com'}
+        sellerOriginCep={activeCartSeller?.cep || masterSeller?.cep || '01310-100'}
+        sellerCheckoutProvider={activeCartSeller?.checkoutProvider || 'mercadopago'}
+        sellerCheckoutApiKey={activeCartSeller?.checkoutApiKey || ''}
+        sellerCheckoutUrl={activeCartSeller?.checkoutUrl || ''}
         approvedProposal={approvedProposal}
         onClearApprovedProposal={() => setApprovedProposal(null)}
       />

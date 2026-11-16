@@ -1,8 +1,8 @@
 import React from 'react';
-import { ShoppingBag, Search, ShieldCheck, UserCheck } from 'lucide-react';
+import { ShoppingBag, Search, ShieldCheck, UserCheck, MessageSquare, Sun, Moon } from 'lucide-react';
 import { CartItem, FilterState, Seller } from '../types.ts';
 import { formatBRL } from '../utils/comicLogic.ts';
-import { HQMasterLogo } from './HQMasterLogo.tsx';
+import { GeekGridLogo } from './HQMasterLogo.tsx';
 
 interface HeaderProps {
   cart: CartItem[];
@@ -13,6 +13,8 @@ interface HeaderProps {
   onOpenPartnerModal: () => void;
   currentSeller: Seller | null;
   onLogoutSeller: () => void;
+  theme: 'light' | 'dark';
+  onToggleTheme: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -21,56 +23,40 @@ export const Header: React.FC<HeaderProps> = ({
   filters,
   onUpdateFilters,
   onNavigateToAdmin,
+  onOpenPartnerModal,
   currentSeller,
   onLogoutSeller,
+  theme,
+  onToggleTheme,
 }) => {
   const totalCartCount = cart.reduce((acc, item) => acc + item.quantity, 0);
   const totalCartValue = cart.reduce((acc, item) => acc + item.hq.price * item.quantity, 0);
 
   return (
-    <header className="sticky top-0 z-40 bg-[#0a0d14]/95 backdrop-blur-md border-b border-zinc-800/80 shadow-2xl">
-      {/* Top subtle info row */}
-      <div className="bg-[#101420] border-b border-zinc-800/60 py-1.5 px-4 text-xs text-zinc-300">
-        <div className="max-w-7xl mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <span className="w-1.5 h-1.5 rounded-full bg-amber-400"></span>
-            <span className="text-[11px] text-zinc-300 font-medium">
-              Acervo de Revistas em Quadrinhos Clássicas & Coleções Completas
-            </span>
-          </div>
+    <header className="sticky top-0 z-40 bg-[var(--gg-bg)]/95 backdrop-blur-md border-b border-[var(--gg-border)] transition-colors">
+      <div className="max-w-7xl mx-auto px-3 sm:px-6 py-2.5 sm:py-3 flex items-center justify-between gap-2 sm:gap-3">
+        {/* Clean Brand Mark */}
+        <a href="#" className="flex items-center shrink-0">
+          <GeekGridLogo size="md" />
+        </a>
 
-          <div className="flex items-center gap-4 text-xs">
-            <span className="text-zinc-400 text-[11px] hidden sm:inline">
-              Envio com Rastreio Seguro para Todo o Brasil
-            </span>
-          </div>
-        </div>
-      </div>
-
-      {/* Main navigation row */}
-      <div className="max-w-7xl mx-auto px-4 py-3 sm:py-3.5 flex items-center justify-between gap-3">
-        {/* Logo and Brand */}
-        <div className="flex items-center gap-3">
-          <a href="#" className="flex items-center gap-2.5">
-            <HQMasterLogo size="md" />
-          </a>
-        </div>
-
-        {/* Search bar */}
+        {/* Search bar (Desktop) */}
         <div className="flex-1 max-w-xl mx-2 hidden md:block">
           <div className="relative">
             <input
               type="text"
               value={filters.search}
               onChange={(e) => onUpdateFilters({ search: e.target.value })}
-              placeholder="Buscar por herói, série, título ou número da edição..."
-              className="w-full bg-zinc-900/90 border border-zinc-700/80 rounded-full py-2 pl-10 pr-4 text-xs sm:text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 transition-all"
+              placeholder="Buscar por título, série, livro, action figure ou nº..."
+              className="w-full bg-[var(--gg-surface)] border border-[var(--gg-border)] rounded-xl py-2 pl-10 pr-8 text-xs sm:text-sm text-[var(--gg-text-strong)] placeholder-[var(--gg-text-subtle)] focus:outline-none focus:border-amber-500 transition-colors"
             />
-            <Search className="w-4 h-4 text-zinc-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+            <Search className="w-4 h-4 text-[var(--gg-text-subtle)] absolute left-3.5 top-1/2 -translate-y-1/2" />
             {filters.search && (
               <button
+                type="button"
                 onClick={() => onUpdateFilters({ search: '' })}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-zinc-400 hover:text-white"
+                aria-label="Limpar busca"
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-[var(--gg-text-muted)] hover:text-[var(--gg-text-strong)]"
               >
                 ✕
               </button>
@@ -78,25 +64,57 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
         </div>
 
-        {/* Action Buttons */}
-        <div className="flex items-center gap-2 sm:gap-3">
+        {/* Action Controls */}
+        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+          {/* Quick Seller Registration CTA */}
+          <button
+            type="button"
+            onClick={onOpenPartnerModal}
+            className="hidden lg:flex items-center gap-1.5 text-[var(--gg-text-muted)] hover:text-[var(--gg-accent-text)] px-2.5 py-1.5 rounded-xl text-xs font-medium transition-colors"
+          >
+            <MessageSquare className="w-3.5 h-3.5 text-[var(--gg-accent-text)]" />
+            <span>Quero vender</span>
+          </button>
+
+          {/* Stylish Theme Switcher */}
+          <button
+            type="button"
+            onClick={onToggleTheme}
+            aria-label={theme === 'dark' ? 'Ativar modo claro' : 'Ativar modo escuro'}
+            title={theme === 'dark' ? 'Mudar para Modo Claro' : 'Mudar para Modo Escuro'}
+            className="relative flex items-center gap-1.5 bg-[var(--gg-surface)] hover:bg-[var(--gg-surface-2)] border border-[var(--gg-border)] text-[var(--gg-text)] px-2.5 py-1.5 rounded-xl text-xs font-medium transition-all active:scale-95"
+          >
+            <span className="relative w-4 h-4 flex items-center justify-center">
+              {theme === 'dark' ? (
+                <Sun className="w-4 h-4 text-amber-400 transition-transform duration-300" />
+              ) : (
+                <Moon className="w-4 h-4 text-slate-700 transition-transform duration-300" />
+              )}
+            </span>
+            <span className="hidden xl:inline text-[11px] font-semibold">
+              {theme === 'dark' ? 'Claro' : 'Escuro'}
+            </span>
+          </button>
+
           {/* Admin access button */}
           {currentSeller ? (
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1">
               <button
+                type="button"
                 onClick={onNavigateToAdmin}
-                className="flex items-center gap-1.5 bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/40 px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors"
+                className="flex items-center gap-1.5 bg-amber-500/15 hover:bg-amber-500/25 text-[var(--gg-accent-text)] border border-amber-500/30 px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors"
                 title="Ir para o Painel Administrativo"
               >
-                <UserCheck className="w-4 h-4" />
-                <span className="hidden sm:inline">
-                  {currentSeller.role === 'master' ? 'Painel Admin' : currentSeller.storeName}
+                <UserCheck className="w-4 h-4 shrink-0" />
+                <span className="hidden sm:inline max-w-[110px] truncate">
+                  {currentSeller.role === 'master' ? 'Painel' : currentSeller.storeName}
                 </span>
-                <span className="sm:hidden">Admin</span>
+                <span className="sm:hidden">Painel</span>
               </button>
               <button
+                type="button"
                 onClick={onLogoutSeller}
-                className="text-xs text-zinc-400 hover:text-zinc-200 px-1 py-1"
+                className="text-[11px] sm:text-xs text-[var(--gg-text-muted)] hover:text-[var(--gg-text-strong)] px-1.5 py-1 hidden sm:inline"
                 title="Sair"
               >
                 Sair
@@ -104,30 +122,32 @@ export const Header: React.FC<HeaderProps> = ({
             </div>
           ) : (
             <button
+              type="button"
               onClick={onNavigateToAdmin}
-              className="flex items-center gap-1.5 bg-zinc-800/80 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors"
+              className="flex items-center gap-1.5 bg-[var(--gg-surface)] hover:bg-[var(--gg-surface-2)] text-[var(--gg-text-strong)] border border-[var(--gg-border)] px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors"
             >
-              <ShieldCheck className="w-4 h-4 text-amber-400" />
-              <span className="hidden sm:inline">Painel Admin</span>
-              <span className="sm:hidden">Admin</span>
+              <ShieldCheck className="w-4 h-4 text-[var(--gg-accent-text)] shrink-0" />
+              <span className="hidden sm:inline">Área do Lojista</span>
+              <span className="sm:hidden">Entrar</span>
             </button>
           )}
 
           {/* Cart Button */}
           <button
+            type="button"
             onClick={onOpenCart}
             aria-label="Abrir carrinho de compras"
-            className="relative flex items-center gap-2 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-black font-bold px-3.5 py-1.5 rounded-xl shadow-md transition-all active:scale-95"
+            className="relative flex items-center gap-1.5 sm:gap-2 bg-amber-500 hover:bg-amber-400 text-zinc-950 font-bold px-2.5 sm:px-3.5 py-1.5 rounded-xl transition-colors active:scale-95"
           >
-            <ShoppingBag className="w-4 h-4 text-black" />
+            <ShoppingBag className="w-4 h-4 shrink-0" />
             <span className="text-xs hidden sm:inline">Carrinho</span>
             {totalCartCount > 0 && (
-              <span className="bg-black text-amber-300 text-[11px] font-black px-1.5 py-0.5 rounded-full ml-0.5">
+              <span className="bg-zinc-950 text-amber-300 text-[11px] font-bold px-1.5 py-0.5 rounded-md tabular-nums">
                 {totalCartCount}
               </span>
             )}
             {totalCartValue > 0 && (
-              <span className="text-xs hidden lg:inline font-black border-l border-black/20 pl-2">
+              <span className="text-xs hidden lg:inline font-bold border-l border-zinc-950/20 pl-2 tabular-nums">
                 {formatBRL(totalCartValue)}
               </span>
             )}
@@ -135,18 +155,26 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
       </div>
 
-      {/* Mobile search input */}
-      <div className="px-4 pb-2.5 md:hidden">
-        <div className="relative">
+      {/* Mobile search + quick action bar */}
+      <div className="px-3 pb-2.5 md:hidden flex items-center gap-2">
+        <div className="relative flex-1">
           <input
             type="text"
             value={filters.search}
             onChange={(e) => onUpdateFilters({ search: e.target.value })}
-            placeholder="Buscar por herói, série, título..."
-            className="w-full bg-zinc-900 border border-zinc-700/80 rounded-full py-2 pl-9 pr-4 text-xs text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-amber-500"
+            placeholder="Buscar HQs, livros, colecionáveis..."
+            className="w-full bg-[var(--gg-surface)] border border-[var(--gg-border)] rounded-xl py-2 pl-9 pr-4 text-xs text-[var(--gg-text-strong)] placeholder-[var(--gg-text-subtle)] focus:outline-none focus:border-amber-500"
           />
-          <Search className="w-3.5 h-3.5 text-zinc-400 absolute left-3 top-1/2 -translate-y-1/2" />
+          <Search className="w-3.5 h-3.5 text-[var(--gg-text-subtle)] absolute left-3 top-1/2 -translate-y-1/2" />
         </div>
+        <button
+          type="button"
+          onClick={onOpenPartnerModal}
+          className="shrink-0 bg-[var(--gg-surface)] border border-[var(--gg-border)] text-[var(--gg-text)] hover:border-amber-500/60 px-2.5 py-2 rounded-xl text-[11px] font-semibold flex items-center gap-1"
+        >
+          <MessageSquare className="w-3.5 h-3.5 text-[var(--gg-accent-text)]" />
+          <span>Vender</span>
+        </button>
       </div>
     </header>
   );
